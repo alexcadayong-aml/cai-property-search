@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Google Account persistent sessions & credentials (SENSITIVE)
+Google_Account_Profile/
+credentials.json
+oauth_credentials.json
+token.json
+*.pem
+*.key
+
+# Temporary sync & inspection files
+temp_*.xlsx
+temp_*.csv
+*.log
+
+# Environments
+env/
+venv/
+.venv/
+
+# Unrelated archive scripts & media folders
+marketing-app/
+project_photos/
+scratch/
+Properties_OLD.csv
+wix_model_analysis.json
+stress_and_routing_report.json
+home_slug_audit.json
+extracted_site_data.json
+analyze_projects_csv.ps1
+extract_next_f.ps1
+parse_chunk_matches.ps1
+parse_html_nodes.ps1
+projectDetail_page.js
+fetch_highend_photos.py
+fetch_project_photos.py
+download_batch_apr10.py
+enhance_photos.py

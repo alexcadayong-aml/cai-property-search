@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Property Search Tool — Dual Google Sheets</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#f0f7ff',
+              100: '#e0effe',
+              500: '#0284c7',
+              600: '#0369a1',
+              700: '#075985',
+              900: '#0c4a6e',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    .highlight { background-color: #fef08a; padding: 0 2px; border-radius: 2px; font-weight: 600; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col antialiased selection:bg-sky-500 selection:text-white">
+
+  <!-- Top Navigation Header -->
+  <header class="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      <!-- Logo / Title -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center text-white font-bold shadow-md shadow-sky-500/20 text-lg">
+          🏢
+        </div>
+        <div>
+          <h1 class="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            Property Search Engine
+            <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 border border-sky-200">Google Sheets</span>
+          </h1>
+          <p class="text-xs text-slate-500 hidden sm:block">Universal full-column search across Rent & Sale listings</p>
+        </div>
+      </div>
+
+      <!-- Action Badges / Controls -->
+      <div class="flex items-center gap-2.5">
+        <!-- Status Pill -->
+        <div id="status-pill" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100 border border-slate-200 text-xs font-medium text-slate-600">
+          <span class="relative flex h-2 w-2">
+            <span id="status-ping" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span id="status-dot" class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+          <span id="status-text">Checking...</span>
+        </div>
+
+        <!-- Sync Button -->
+        <button id="btn-sync" onclick="syncSheets()" title="Fetch latest data from Google Sheets / CSV"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-700 shadow-sm transition">
+          <svg id="sync-icon" class="w-3.5 h-3.5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span id="sync-label">Sync Sheets</span>
+        </button>
+
+        <!-- Connect with Google Account Button -->
+        <button id="btn-browser-sync" onclick="browserSyncWithGoogle()" title="Sign in with alexiscadayong@gmail.com and sync private sheets"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-sm transition">
+          <span>🔐 Connect Gmail</span>
+        </button>
+
+        <!-- Settings Modal Button -->
+        <button onclick="openSettingsModal()" title="Google Sheets IDs & Permissions Setup"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white shadow-sm transition">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          <span>Sheets Config</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Search Section -->
+  <div class="bg-gradient-to-b from-white to-slate-50 border-b border-slate-200 pt-8 pb-7 px-4 sm:px-6">
+    <div class="max-w-4xl mx-auto space-y-4">
+      
+      <!-- Search Input Container -->
+      <div class="relative group">
+        <div class="absolute -inset-0.5 bg-gradient-to-r from-sky-500 to-indigo-500 rounded-2xl blur opacity-20 group-hover:opacity-35 transition duration-300"></div>
+        <div class="relative flex items-center bg-white rounded-2xl border border-slate-200 shadow-lg shadow-slate-200/50 overflow-hidden px-4 py-2">
+          <svg class="w-6 h-6 text-slate-400 mr-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input 
+            type="text" 
+            id="search-input" 
+            placeholder="Search ANY keyword in ANY column (e.g., 'Two Roxas', '46D', '₱450,000', 'Ayala Triangle', 'Commercial Taguig', 'RCA Direct')..." 
+            autocomplete="off"
+            class="w-full text-slate-800 placeholder-slate-400 text-base sm:text-lg focus:outline-none bg-transparent"
+            onkeydown="if(event.key === 'Enter') performSearch()"
+            oninput="handleSearchInput(this.value)"
+          />
+          <button id="btn-clear" onclick="clearSearch()" class="hidden text-slate-400 hover:text-slate-600 px-2 text-sm font-semibold transition">
+            ✕
+          </button>
+          <button 
+            onclick="performSearch()"
+            class="ml-2 px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white font-semibold text-sm shadow-sm transition flex items-center gap-1.5 flex-shrink-0">
+            <span>Search</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick Chips & Filters -->
+      <div class="flex flex-wrap items-center justify-between gap-3 text-xs pt-1">
+        <!-- Sheet Source Filter -->
+        <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+          <button onclick="setSheetFilter('all')" id="filter-sheet-all" class="filter-sheet-btn px-3 py-1.5 rounded-lg font-semibold bg-white text-slate-900 shadow-sm transition">
+            All Listings (<span id="count-all">...</span>)
+          </button>
+          <button onclick="setSheetFilter('For Rent')" id="filter-sheet-rent" class="filter-sheet-btn px-3 py-1.5 rounded-lg font-semibold text-slate-600 hover:text-slate-900 transition">
+            🔑 For Rent (<span id="count-rent">...</span>)
+          </button>
+          <button onclick="setSheetFilter('For Sale')" id="filter-sheet-sale" class="filter-sheet-btn px-3 py-1.5 rounded-lg font-semibold text-slate-600 hover:text-slate-900 transition">
+            🏷️ For Sale (<span id="count-sale">...</span>)
+          </button>
+        </div>
+
+        <!-- Availability & Directness Filters -->
+        <div class="flex items-center gap-2">
+          <label class="text-slate-500 font-medium hidden sm:inline">Status:</label>
+          <select id="avail-select" onchange="performSearch()" class="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-700 focus:outline-none focus:border-sky-500 shadow-sm">
+            <option value="all">All Availability</option>
+            <option value="available">🟢 Available Only</option>
+            <option value="leased">🟡 Leased</option>
+            <option value="sold">🔴 Sold</option>
+          </select>
+
+          <label class="text-slate-500 font-medium hidden sm:inline">Type:</label>
+          <select id="direct-select" onchange="performSearch()" class="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 focus:outline-none focus:border-sky-500 shadow-sm">
+            <option value="all">⚡ All (Direct + 1-Away)</option>
+            <option value="direct">🎯 Direct Only (Exclude 1-Away)</option>
+            <option value="one_away">🔄 One Away Only</option>
+          </select>
+
+          <!-- Fuzzy Toggle -->
+          <label class="flex items-center gap-1.5 cursor-pointer select-none text-slate-600 bg-white border border-slate-200 px-2.5 py-1.5 rounded-lg shadow-sm">
+            <input type="checkbox" id="fuzzy-checkbox" onchange="performSearch()" class="rounded text-sky-600 focus:ring-0">
+            <span class="font-medium">Fuzzy Match</span>
+          </label>
+
+          <!-- Export CSV -->
+          <button onclick="exportToCSV()" title="Export current results as CSV" class="flex items-center gap-1 bg-white border border-slate-200 hover:bg-slate-50 px-2.5 py-1.5 rounded-lg text-slate-700 font-medium shadow-sm transition">
+            <svg class="w-3.5 h-3.5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span>Export CSV</span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Main Content Area -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    
+    <!-- Results Header / Feedback -->
+    <div class="flex items-center justify-between pb-4 mb-2 border-b border-slate-200 text-sm">
+      <div id="results-count-banner" class="font-medium text-slate-600">
+        Loading properties...
+      </div>
+      <div class="text-xs text-slate-400 flex items-center gap-2">
+        <span>Click any card to expand full row attributes</span>
+      </div>
+    </div>
+
+    <!-- Results Container -->
+    <div id="results-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+      <!-- Injected by JavaScript -->
+    </div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="hidden text-center py-16 px-4">
+      <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto text-2xl mb-3 text-slate-400">
+        🔍
+      </div>
+      <h3 class="text-base font-bold text-slate-800 mb-1">No matching properties found</h3>
+      <p class="text-sm text-slate-500 max-w-md mx-auto mb-4">
+        Try searching with fewer keywords, check for spelling, or toggle "Fuzzy Match" to find close matches across any column.
+      </p>
+      <button onclick="clearSearch()" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-xs font-semibold text-slate-700 transition">
+        Clear Search & View All
+      </button>
+    </div>
+
+  </main>
+
+  <!-- Details Modal: Full Property & Raw Columns -->
+  <div id="detail-modal" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+      
+      <!-- Modal Header -->
+      <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+        <div class="flex items-center gap-2">
+          <span id="modal-sheet-badge" class="px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider"></span>
+          <span id="modal-avail-badge" class="px-2.5 py-1 rounded-md text-xs font-semibold"></span>
+        </div>
+        <button onclick="closeDetailModal()" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-200 transition">
+          ✕
+        </button>
+      </div>
+
+      <!-- Modal Body -->
+      <div class="p-6 overflow-y-auto space-y-6 custom-scrollbar text-sm">
+        
+        <!-- Unit & Price Hero -->
+        <div class="bg-sky-50 border border-sky-100 p-4 rounded-xl flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div class="text-xs uppercase font-bold text-sky-700 tracking-wider">Unit No. / Address</div>
+            <div id="modal-unit" class="text-lg font-extrabold text-slate-900"></div>
+          </div>
+          <div class="text-right">
+            <div class="text-xs uppercase font-bold text-sky-700 tracking-wider">Price</div>
+            <div id="modal-price" class="text-xl font-black text-emerald-700"></div>
+          </div>
+        </div>
+
+        <!-- Description -->
+        <div>
+          <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Property Description</h4>
+          <div id="modal-desc" class="p-4 bg-slate-50 border border-slate-200 rounded-xl whitespace-pre-wrap font-sans text-slate-700 leading-relaxed text-xs sm:text-sm"></div>
+        </div>
+
+        <!-- Source / Broker -->
+        <div class="flex flex-wrap items-center gap-4 text-xs">
+          <div>
+            <span class="text-slate-400 font-medium">Source / Listing:</span>
+            <span id="modal-source" class="font-bold text-slate-800 ml-1"></span>
+          </div>
+          <div id="modal-listing-id-container">
+            <span class="text-slate-400 font-medium">Listing ID:</span>
+            <span id="modal-listing-id" class="font-mono font-semibold text-slate-700 ml-1"></span>
+          </div>
+          <div id="modal-photos-container">
+            <a id="modal-photos-link" href="#" target="_blank" rel="noopener" class="inline-flex items-center gap-1 text-sky-600 hover:text-sky-700 font-semibold underline">
+              📁 Open Photos in Google Drive
+            </a>
+          </div>
+        </div>
+
+        <!-- All Columns Table -->
+        <div>
+          <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">All Columns in Sheet Row</h4>
+          <div class="border border-slate-200 rounded-xl overflow-hidden max-h-60 overflow-y-auto custom-scrollbar">
+            <table class="w-full text-xs text-left">
+              <thead class="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200 sticky top-0">
+                <tr>
+                  <th class="px-3 py-2">Column Header</th>
+                  <th class="px-3 py-2">Value</th>
+                </tr>
+              </thead>
+              <tbody id="modal-columns-tbody" class="divide-y divide-slate-100 font-mono text-slate-700">
+                <!-- Injected -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="px-6 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+        <button onclick="copyCurrentModalDetails()" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-semibold text-xs transition flex items-center gap-1.5 shadow-sm">
+          📋 Copy Details to Clipboard
+        </button>
+        <button onclick="closeDetailModal()" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-semibold text-xs transition">
+          Close
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Settings & Google Permission Modal -->
+  <div id="settings-modal" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl max-w-xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-200">
+      
+      <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+        <div class="flex items-center gap-2">
+          <div class="p-1.5 rounded-lg bg-sky-100 text-sky-700 font-bold">⚙️</div>
+          <h3 class="text-base font-bold text-slate-900">Google Sheets & Permissions Config</h3>
+        </div>
+        <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-200 transition">
+          ✕
+        </button>
+      </div>
+
+      <div class="p-6 overflow-y-auto space-y-5 custom-scrollbar text-xs sm:text-sm">
+        
+        <!-- Method Tabs / Instructions -->
+        <div class="bg-sky-50 border border-sky-200 rounded-xl p-4 text-sky-950 space-y-3">
+          <div class="font-bold flex items-center justify-between">
+            <span class="flex items-center gap-1.5 text-sky-900">
+              ⚡ Connect with <b>alexiscadayong@gmail.com</b> (No Cloud setup required!)
+            </span>
+            <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-sky-200 text-sky-800">Fastest</span>
+          </div>
+          <div class="text-xs text-sky-900/90 space-y-1.5 leading-relaxed">
+            <p>Since your Gmail account <b>alexiscadayong@gmail.com</b> has permission to view the private sheets, the simplest 60-second way is using Google's built-in <b>Apps Script Web App</b>:</p>
+            <ol class="list-decimal list-inside space-y-1 pl-1 font-normal">
+              <li>Open your private Google Sheet in browser while logged in as <b>alexiscadayong@gmail.com</b>.</li>
+              <li>Click <b>Extensions</b> &rarr; <b>Apps Script</b> in the top menu.</li>
+              <li>Delete any template code and paste this exact snippet:
+                <div class="my-1.5 p-2 bg-slate-900 text-slate-100 rounded-lg font-mono text-[11px] select-all flex items-center justify-between">
+                  <span>function doGet() { const d = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getDataRange().getValues(); return ContentService.createTextOutput(JSON.stringify(d)).setMimeType(ContentService.MimeType.JSON); }</span>
+                  <button onclick="navigator.clipboard.writeText('function doGet() { const d = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getDataRange().getValues(); return ContentService.createTextOutput(JSON.stringify(d)).setMimeType(ContentService.MimeType.JSON); }'); alert('Snippet copied!');" class="ml-2 px-2 py-1 bg-sky-600 hover:bg-sky-500 rounded text-white text-[10px] font-bold">Copy</button>
+                </div>
+              </li>
+              <li>Click <b>Deploy</b> (top right) &rarr; <b>New deployment</b> &rarr; select <b>Web app</b>.</li>
+              <li>Set <i>"Execute as: Me (alexiscadayong@gmail.com)"</i> and <i>"Who has access: Anyone"</i>.</li>
+              <li>Click <b>Deploy</b>, authorize once, and paste the generated <code>https://script.google.com/macros/s/.../exec</code> URL below!</li>
+            </ol>
+            <p class="pt-1 text-[11px] text-slate-600 italic">💡 Alternatively, if your sheet's General Access is set to <i>"Anyone with the link can view"</i>, you can simply paste the normal Google Sheet URL directly.</p>
+          </div>
+        </div>
+
+        <!-- Sheet 1: Rent -->
+        <div class="space-y-1.5">
+          <label class="font-bold text-slate-700 flex items-center gap-1.5">
+            <span>🔑 Google Sheet 1 (For Rent):</span>
+          </label>
+          <input 
+            type="text" 
+            id="cfg-rent-url" 
+            placeholder="Paste Spreadsheet ID or full URL (https://docs.google.com/spreadsheets/d/...)"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono text-slate-800 focus:outline-none focus:border-sky-500"
+          />
+          <div class="flex items-center gap-2 text-xs text-slate-500">
+            <span>Tab Name (Optional):</span>
+            <input type="text" id="cfg-rent-tab" placeholder="Sheet1 or leave blank" class="px-2 py-1 border border-slate-200 rounded text-xs">
+          </div>
+        </div>
+
+        <!-- Sheet 2: Sale -->
+        <div class="space-y-1.5">
+          <label class="font-bold text-slate-700 flex items-center gap-1.5">
+            <span>🏷️ Google Sheet 2 (For Sale):</span>
+          </label>
+          <input 
+            type="text" 
+            id="cfg-sale-url" 
+            placeholder="Paste Spreadsheet ID or full URL (https://docs.google.com/spreadsheets/d/...)"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono text-slate-800 focus:outline-none focus:border-sky-500"
+          />
+          <div class="flex items-center gap-2 text-xs text-slate-500">
+            <span>Tab Name (Optional):</span>
+            <input type="text" id="cfg-sale-tab" placeholder="Sheet1 or leave blank" class="px-2 py-1 border border-slate-200 rounded text-xs">
+          </div>
+        </div>
+
+        <!-- Credentials File Info -->
+        <div class="space-y-1">
+          <label class="font-bold text-slate-700">Credentials Key File:</label>
+          <input 
+            type="text" 
+            id="cfg-creds-file" 
+            value="credentials.json"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono text-slate-800 focus:outline-none focus:border-sky-500"
+          />
+          <p class="text-xs text-slate-500">Place your Google Cloud Service Account JSON key as <code class="bg-slate-100 px-1 py-0.5 rounded">credentials.json</code> in this folder.</p>
+        </div>
+
+      </div>
+
+      <div class="px-6 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+        <button onclick="saveAndSyncConfig()" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-semibold text-xs transition flex items-center gap-1.5 shadow-sm">
+          💾 Save & Test Connection
+        </button>
+        <button onclick="closeSettingsModal()" class="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-semibold text-xs transition">
+          Cancel
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- JavaScript Application Logic -->
+  <script>
+    let allResults = [];
+    let currentSheetFilter = 'all';
+    let activeModalProperty = null;
+    let searchDebounceTimer = null;
+    let appConfig = null;
+
+    // Initialize on page load
+    window.addEventListener('DOMContentLoaded', () => {
+      fetchStatusAndInitialData();
+    });
+
+    async function fetchStatusAndInitialData() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        appConfig = data.config || {};
+        
+        // Update counts
+        const total = data.total_records || 0;
+        const rentCount = data.sheets?.["For Rent"]?.count || 0;
+        const saleCount = data.sheets?.["For Sale"]?.count || 0;
+
+        document.getElementById('count-all').innerText = total.toLocaleString();
+        document.getElementById('count-rent').innerText = rentCount.toLocaleString();
+        document.getElementById('count-sale').innerText = saleCount.toLocaleString();
+
+        // Update status pill
+        const pill = document.getElementById('status-pill');
+        const text = document.getElementById('status-text');
+        const dot = document.getElementById('status-dot');
+        const ping = document.getElementById('status-ping');
+
+        const isGoogle = Object.values(data.sheets || {}).some(s => s.source === 'google_sheets' || s.source === 'google_account_live');
+        if (isGoogle) {
+          text.innerText = `Google Sheets Connected (${total.toLocaleString()} listings)`;
+          dot.className = "relative inline-flex rounded-full h-2 w-2 bg-emerald-500";
+          ping.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75";
+        } else {
+          text.innerText = `Local Database Active (${total.toLocaleString()} listings)`;
+          dot.className = "relative inline-flex rounded-full h-2 w-2 bg-sky-500";
+          ping.className = "hidden";
+        }
+
+        if (data.service_account_email) {
+          document.getElementById('service-email-display').innerText = data.service_account_email;
+        }
+
+        // Perform initial empty search to show listings
+        performSearch();
+      } catch (err) {
+        console.error("Status error:", err);
+        document.getElementById('status-text').innerText = "Offline / Connection Error";
+      }
+    }
+
+    function handleSearchInput(val) {
+      document.getElementById('btn-clear').classList.toggle('hidden', !val);
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = setTimeout(() => {
+        performSearch();
+      }, 250);
+    }
+
+    function clearSearch() {
+      const input = document.getElementById('search-input');
+      input.value = '';
+      document.getElementById('btn-clear').classList.add('hidden');
+      performSearch();
+      input.focus();
+    }
+
+    function setSheetFilter(sheet) {
+      currentSheetFilter = sheet;
+      document.querySelectorAll('.filter-sheet-btn').forEach(btn => {
+        btn.className = "filter-sheet-btn px-3 py-1.5 rounded-lg font-semibold text-slate-600 hover:text-slate-900 transition";
+      });
+      
+      if (sheet === 'all') {
+        document.getElementById('filter-sheet-all').className = "filter-sheet-btn px-3 py-1.5 rounded-lg font-semibold bg-white text-slate-900 shadow-sm transition";
+      } else if (sheet === 'For Rent') {
+        document.getElementById('filter-sheet-rent').className = "filter-sheet-btn px-3 py-1.5 rounded-lg font-semibold bg-white text-slate-900 shadow-sm transition";
+      } else {
+        document.getElementById('filter-sheet-sale').className = "filter-sheet-btn px-3 py-1.5 rounded-lg font-semibold bg-white text-slate-900 shadow-sm transition";
+      }
+
+      performSearch();
+    }
+
+    async function performSearch() {
+      const query = document.getElementById('search-input').value.trim();
+      const avail = document.getElementById('avail-select').value;
+      const direct = document.getElementById('direct-select') ? document.getElementById('direct-select').value : 'all';
+      const fuzzy = document.getElementById('fuzzy-checkbox').checked;
+
+      const params = new URLSearchParams({
+        q: query,
+        sheet: currentSheetFilter,
+        avail: avail,
+        direct: direct,
+        fuzzy: fuzzy ? 'true' : 'false',
+        limit: '150'
+      });
+
+      const banner = document.getElementById('results-count-banner');
+      banner.innerText = "Searching...";
+
+      try {
+        const res = await fetch(`/api/search?${params.toString()}`);
+        const data = await res.json();
+        allResults = data.results || [];
+        renderResults(allResults, query);
+      } catch (err) {
+        console.error("Search error:", err);
+        banner.innerText = "Error executing search";
+      }
+    }
+
+    function highlightText(text, query) {
+      if (!text || !query) return escapeHtml(text || '');
+      const tokens = query.split(/\s+/).filter(t => t.length > 1);
+      let escaped = escapeHtml(text);
+      tokens.forEach(t => {
+        const regex = new RegExp(`(${escapeRegex(t)})`, 'gi');
+        escaped = escaped.replace(regex, '<mark class="highlight">$1</mark>');
+      });
+      return escaped;
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>'"]/g, 
+        tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+      );
+    }
+
+    function escapeRegex(str) {
+      return str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    }
+
+    function renderResults(results, query) {
+      const container = document.getElementById('results-list');
+      const empty = document.getElementById('empty-state');
+      const banner = document.getElementById('results-count-banner');
+
+      banner.innerHTML = `Showing <b>${results.length.toLocaleString()}</b> result${results.length === 1 ? '' : 's'} ${query ? `for "<span class="text-sky-600 font-semibold">${escapeHtml(query)}</span>"` : ''}`;
+
+      if (results.length === 0) {
+        container.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+
+      empty.classList.add('hidden');
+
+      container.innerHTML = results.map((r, idx) => {
+        const isRent = (r.sheet_source || '').toLowerCase().includes('rent');
+        const sheetBadgeClass = isRent 
+          ? "bg-amber-100 text-amber-800 border border-amber-200" 
+          : "bg-blue-100 text-blue-800 border border-blue-200";
+        const sheetIcon = isRent ? "🔑 FOR RENT" : "🏷️ FOR SALE";
+
+        const isOneAway = r.is_one_away;
+        const directBadge = isOneAway
+          ? `<span class="px-2 py-0.5 rounded text-[10px] font-extrabold bg-purple-100 text-purple-800 border border-purple-200">🔄 ONE AWAY</span>`
+          : `<span class="px-2 py-0.5 rounded text-[10px] font-extrabold bg-slate-100 text-slate-700 border border-slate-200">⚡ DIRECT</span>`;
+
+        const avail = (r.availability || 'AVAILABLE').toUpperCase();
+        let availBadgeClass = "bg-emerald-100 text-emerald-800 border border-emerald-200";
+        if (avail.includes("LEASED") || avail.includes("RENTED")) {
+          availBadgeClass = "bg-amber-100 text-amber-800 border border-amber-200";
+        } else if (avail.includes("SOLD")) {
+          availBadgeClass = "bg-rose-100 text-rose-800 border border-rose-200";
+        }
+
+        const priceText = r.price || "Contact for Price";
+        const unitAddress = r.unit_no_address || r.location || "Unit / Address Unspecified";
+        const descPreview = (r.property_description || "").slice(0, 180);
+        const hasMoreDesc = (r.property_description || "").length > 180;
+
+        const matchedColsPills = (r.matched_columns || []).slice(0, 4).map(c => 
+          `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-mono border border-slate-200">${escapeHtml(c)}</span>`
+        ).join('');
+
+        return `
+          <div class="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-sky-300 transition duration-200 flex flex-col justify-between overflow-hidden">
+            
+            <!-- Card Header -->
+            <div class="p-5 pb-3">
+              <div class="flex items-center justify-between gap-2 mb-2.5">
+                <span class="px-2 py-0.5 rounded text-[11px] font-black tracking-wider ${sheetBadgeClass}">
+                  ${sheetIcon}
+                </span>
+                <div class="flex items-center gap-1.5">
+                  ${directBadge}
+                  <span class="px-2 py-0.5 rounded text-[11px] font-bold ${availBadgeClass}">
+                    ${escapeHtml(avail)}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Unit / Address -->
+              <h3 class="text-base font-bold text-slate-900 leading-snug mb-1 hover:text-sky-600 transition cursor-pointer" onclick="openDetailModal(${idx})">
+                ${highlightText(unitAddress, query)}
+              </h3>
+
+              <!-- Price -->
+              <div class="text-lg font-black text-emerald-600 mb-3">
+                ${highlightText(priceText, query)}
+              </div>
+
+              <!-- Property Description -->
+              <div class="text-xs text-slate-600 leading-relaxed font-normal whitespace-pre-line line-clamp-4 bg-slate-50/70 p-3 rounded-xl border border-slate-100">
+                ${highlightText(descPreview, query)}${hasMoreDesc ? '...' : ''}
+              </div>
+            </div>
+
+            <!-- Card Footer / Metadata -->
+            <div class="px-5 py-3 bg-slate-50 border-t border-slate-100 flex flex-col gap-2">
+              <div class="flex items-center justify-between text-xs">
+                <div class="truncate text-slate-500 font-medium">
+                  Source: <b class="text-slate-700">${escapeHtml(r.source_or_listing || 'DIRECT')}</b>
+                </div>
+                ${r.photos && r.photos.startsWith('http') ? `
+                  <a href="${escapeHtml(r.photos)}" target="_blank" rel="noopener" class="text-sky-600 hover:text-sky-800 font-semibold flex items-center gap-1 text-[11px]">
+                    📸 Photos
+                  </a>
+                ` : ''}
+              </div>
+
+              ${matchedColsPills ? `
+                <div class="flex flex-wrap items-center gap-1 pt-1 border-t border-slate-200/50">
+                  <span class="text-[10px] text-slate-400 font-medium">Matched in:</span>
+                  ${matchedColsPills}
+                </div>
+              ` : ''}
+
+              <!-- Card Action Buttons -->
+              <div class="flex items-center gap-2 pt-2">
+                <button onclick="openDetailModal(${idx})" class="flex-1 py-1.5 px-3 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition text-center shadow-xs">
+                  Full Details
+                </button>
+                <button onclick="copyPropertySnippet(${idx})" title="Copy summary to clipboard" class="py-1.5 px-3 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 text-xs font-semibold transition">
+                  📋 Copy
+                </button>
+              </div>
+
+            </div>
+
+          </div>
+        `;
+      }).join('');
+    }
+
+    function openDetailModal(index) {
+      const prop = allResults[index];
+      if (!prop) return;
+      activeModalProperty = prop;
+
+      const isRent = (prop.sheet_source || '').toLowerCase().includes('rent');
+      const badge = document.getElementById('modal-sheet-badge');
+      badge.innerText = isRent ? "🔑 FOR RENT" : "🏷️ FOR SALE";
+      badge.className = isRent ? "px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider bg-amber-100 text-amber-800" : "px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider bg-blue-100 text-blue-800";
+
+      const availBadge = document.getElementById('modal-avail-badge');
+      availBadge.innerText = prop.availability || 'AVAILABLE';
+      availBadge.className = "px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-100 text-emerald-800";
+
+      document.getElementById('modal-unit').innerText = prop.unit_no_address || prop.location || 'N/A';
+      document.getElementById('modal-price').innerText = prop.price || 'Contact for Price';
+      document.getElementById('modal-desc').innerText = prop.property_description || 'No description provided';
+      document.getElementById('modal-source').innerText = prop.source_or_listing || 'DIRECT';
+
+      const listingIdContainer = document.getElementById('modal-listing-id-container');
+      if (prop.listing_id) {
+        document.getElementById('modal-listing-id').innerText = prop.listing_id;
+        listingIdContainer.classList.remove('hidden');
+      } else {
+        listingIdContainer.classList.add('hidden');
+      }
+
+      const photosContainer = document.getElementById('modal-photos-container');
+      const photosLink = document.getElementById('modal-photos-link');
+      if (prop.photos && prop.photos.startsWith('http')) {
+        photosLink.href = prop.photos;
+        photosContainer.classList.remove('hidden');
+      } else {
+        photosContainer.classList.add('hidden');
+      }
+
+      // Populate raw columns
+      const tbody = document.getElementById('modal-columns-tbody');
+      const cols = prop.all_columns || {};
+      tbody.innerHTML = Object.entries(cols).map(([col, val]) => `
+        <tr class="hover:bg-slate-50">
+          <td class="px-3 py-2 font-medium text-slate-800 bg-slate-50/50 w-1/3 border-r border-slate-100">${escapeHtml(col)}</td>
+          <td class="px-3 py-2 text-slate-600 break-words">${escapeHtml(String(val))}</td>
+        </tr>
+      `).join('');
+
+      document.getElementById('detail-modal').classList.remove('hidden');
+    }
+
+    function closeDetailModal() {
+      document.getElementById('detail-modal').classList.add('hidden');
+      activeModalProperty = null;
+    }
+
+    function copyPropertySnippet(index) {
+      const p = allResults[index];
+      if (!p) return;
+      const snippet = `📍 ${p.unit_no_address || ''} (${p.sheet_source || ''})\n💰 Price: ${p.price || ''}\n🟢 Status: ${p.availability || ''}\n👤 Source: ${p.source_or_listing || ''}\n\n📝 Details:\n${p.property_description || ''}`;
+      navigator.clipboard.writeText(snippet);
+      alert("Property summary copied to clipboard!");
+    }
+
+    function copyCurrentModalDetails() {
+      if (!activeModalProperty) return;
+      const p = activeModalProperty;
+      const snippet = `📍 ${p.unit_no_address || ''} (${p.sheet_source || ''})\n💰 Price: ${p.price || ''}\n🟢 Status: ${p.availability || ''}\n👤 Source: ${p.source_or_listing || ''}\n\n📝 Details:\n${p.property_description || ''}\n${p.photos ? `\n📸 Photos: ${p.photos}` : ''}`;
+      navigator.clipboard.writeText(snippet);
+      alert("Property details copied to clipboard!");
+    }
+
+    function exportToCSV() {
+      if (!allResults.length) {
+        alert("No results to export");
+        return;
+      }
+      const headers = ["Sheet", "Unit No / Address", "Price", "Availability", "Source / Listing", "Description", "Photos Link"];
+      const rows = allResults.map(r => [
+        `"${(r.sheet_source || '').replace(/"/g, '""')}"`,
+        `"${(r.unit_no_address || '').replace(/"/g, '""')}"`,
+        `"${(r.price || '').replace(/"/g, '""')}"`,
+        `"${(r.availability || '').replace(/"/g, '""')}"`,
+        `"${(r.source_or_listing || '').replace(/"/g, '""')}"`,
+        `"${(r.property_description || '').replace(/"/g, '""')}"`,
+        `"${(r.photos || '').replace(/"/g, '""')}"`
+      ]);
+
+      const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `property_search_results_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    async function syncSheets() {
+      const syncBtn = document.getElementById('btn-sync');
+      const syncIcon = document.getElementById('sync-icon');
+      const syncLabel = document.getElementById('sync-label');
+
+      syncBtn.disabled = true;
+      syncIcon.classList.add('animate-spin');
+      syncLabel.innerText = "Syncing...";
+
+      try {
+        const res = await fetch('/api/sync', { method: 'POST' });
+        const data = await res.json();
+        await fetchStatusAndInitialData();
+        alert(`Sync complete! Loaded ${data.total_records || 0} properties.`);
+      } catch (err) {
+        console.error("Sync error:", err);
+        alert("Error syncing sheets: " + err.message);
+      } finally {
+        syncBtn.disabled = false;
+        syncIcon.classList.remove('animate-spin');
+        syncLabel.innerText = "Sync Sheets";
+      }
+    }
+
+    async function browserSyncWithGoogle() {
+      const btn = document.getElementById('btn-browser-sync');
+      const originalHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<span>⏳ Chrome opening... Log in if prompted</span>`;
+
+      try {
+        const res = await fetch('/api/browser-sync', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          alert(`🎉 SUCCESS! Synced ${data.total_records.toLocaleString()} live properties using your Google account!`);
+          await fetchStatusAndInitialData();
+        } else {
+          alert(`⚠️ Sync failed: ${data.error || 'Please make sure you are signed in on Chrome'}`);
+        }
+      } catch (err) {
+        alert("Error during browser sync: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+      }
+    }
+
+    function openSettingsModal() {
+      if (appConfig) {
+        document.getElementById('cfg-rent-url').value = appConfig.sheet_rent?.spreadsheet_id_or_url || '';
+        document.getElementById('cfg-rent-tab').value = appConfig.sheet_rent?.worksheet_name || '';
+        document.getElementById('cfg-sale-url').value = appConfig.sheet_sale?.spreadsheet_id_or_url || '';
+        document.getElementById('cfg-sale-tab').value = appConfig.sheet_sale?.worksheet_name || '';
+        document.getElementById('cfg-creds-file').value = appConfig.auth?.service_account_file || 'credentials.json';
+      }
+      document.getElementById('settings-modal').classList.remove('hidden');
+    }
+
+    function closeSettingsModal() {
+      document.getElementById('settings-modal').classList.add('hidden');
+    }
+
+    function copyServiceEmail() {
+      const text = document.getElementById('service-email-display').innerText;
+      if (text && !text.includes('pending')) {
+        navigator.clipboard.writeText(text);
+        alert(`Copied Service Account email to clipboard:\n${text}`);
+      } else {
+        alert("Please place your credentials.json in the project directory first.");
+      }
+    }
+
+    async function saveAndSyncConfig() {
+      const rentUrl = document.getElementById('cfg-rent-url').value.trim();
+      const rentTab = document.getElementById('cfg-rent-tab').value.trim();
+      const saleUrl = document.getElementById('cfg-sale-url').value.trim();
+      const saleTab = document.getElementById('cfg-sale-tab').value.trim();
+      const credsFile = document.getElementById('cfg-creds-file').value.trim();
+
+      const payload = {
+        sheet_rent: {
+          name: "For Rent",
+          spreadsheet_id_or_url: rentUrl,
+          worksheet_name: rentTab,
+          csv_fallback_path: "Master_For_Rent.csv"
+        },
+        sheet_sale: {
+          name: "For Sale",
+          spreadsheet_id_or_url: saleUrl,
+          worksheet_name: saleTab,
+          csv_fallback_path: "Master_For_Sale.csv"
+        },
+        auth: {
+          auth_mode: "service_account",
+          service_account_file: credsFile || "credentials.json"
+        }
+      };
+
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        closeSettingsModal();
+        await syncSheets();
+      } catch (err) {
+        alert("Failed to save configuration: " + err.message);
+      }
+    }
+  </script>
+</body>
+</html>

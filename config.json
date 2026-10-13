@@ -1,0 +1,29 @@
+{
+  "sheet_rent": {
+    "name": "For Rent",
+    "spreadsheet_id_or_url": "https://docs.google.com/spreadsheets/d/1O1MTpxvVscXDiU_HaouB8wVd0CG7qGkb/edit?gid=1897869768#gid=1897869768",
+    "worksheet_name": "",
+    "csv_fallback_path": "Master_For_Rent.csv"
+  },
+  "sheet_sale": {
+    "name": "For Sale",
+    "spreadsheet_id_or_url": "https://docs.google.com/spreadsheets/d/11BjHtwdTf62lwHor5gp4EQahES14GpiA/edit?gid=166565106#gid=166565106",
+    "worksheet_name": "",
+    "csv_fallback_path": "Master_For_Sale.csv"
+  },
+  "auth": {
+    "auth_mode": "service_account",
+    "service_account_file": "credentials.json",
+    "oauth_credentials_file": "oauth_credentials.json",
+    "token_file": "token.json",
+    "instructions": "Place your Google Service Account JSON file as 'credentials.json' in this folder and share both Google Sheets with the service account client_email with 'Viewer' permission."
+  },
+  "cache": {
+    "enabled": true,
+    "cache_file": "sheets_cache.json"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 5055
+  }
+}
