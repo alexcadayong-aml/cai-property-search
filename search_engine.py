@@ -125,6 +125,7 @@ class PropertySearchEngine:
         directness_filter: str = "all",  # "all" | "direct" | "one_away"
         min_price: Optional[float] = None,
         max_price: Optional[float] = None,
+        sort_by: str = "date_desc",       # "date_desc" | "relevance" | "price_asc" | "price_desc" | "date_asc"
         limit: int = 150,
         enable_fuzzy: bool = False
     ) -> List[Dict[str, Any]]:
@@ -306,8 +307,36 @@ class PropertySearchEngine:
                     "relevance_score": relevance_score
                 })
 
-        # Sort by relevance score descending
-        results.sort(key=lambda r: r.get("relevance_score", 0), reverse=True)
+        # Sort results (Most recently updated first by default)
+        if sort_by == "date_desc":
+            results.sort(
+                key=lambda r: (1 if r.get("date_updated_iso") else 0, r.get("date_updated_iso", ""), r.get("relevance_score", 0)),
+                reverse=True
+            )
+        elif sort_by == "relevance":
+            results.sort(
+                key=lambda r: (r.get("relevance_score", 0), 1 if r.get("date_updated_iso") else 0, r.get("date_updated_iso", "")),
+                reverse=True
+            )
+        elif sort_by == "price_asc":
+            def p_asc(r):
+                p = parse_numeric_price(r.get("price"))
+                return (0 if p is not None else 1, p if p is not None else 0)
+            results.sort(key=p_asc)
+        elif sort_by == "price_desc":
+            def p_desc(r):
+                p = parse_numeric_price(r.get("price"))
+                return (1 if p is not None else 0, p if p is not None else 0)
+            results.sort(key=p_desc, reverse=True)
+        elif sort_by == "date_asc":
+            results.sort(
+                key=lambda r: (0 if r.get("date_updated_iso") else 1, r.get("date_updated_iso", "9999-99-99"))
+            )
+        else:
+            results.sort(
+                key=lambda r: (1 if r.get("date_updated_iso") else 0, r.get("date_updated_iso", ""), r.get("relevance_score", 0)),
+                reverse=True
+            )
 
         if limit and limit > 0:
             return results[:limit]

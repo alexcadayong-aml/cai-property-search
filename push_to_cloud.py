@@ -11,6 +11,12 @@ import sys
 import json
 import requests
 
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
+
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "sheets_cache.json")
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 

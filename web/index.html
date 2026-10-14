@@ -327,12 +327,21 @@
   <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
     
     <!-- Results Header / Feedback -->
-    <div class="flex items-center justify-between pb-4 mb-2 border-b border-slate-200 text-sm">
+    <div class="flex flex-wrap items-center justify-between gap-3 pb-4 mb-2 border-b border-slate-200 text-sm">
       <div id="results-count-banner" class="font-medium text-slate-600">
         Loading properties...
       </div>
-      <div class="text-xs text-slate-400 flex items-center gap-2">
-        <span>Click any card to expand full row attributes</span>
+      <div class="flex items-center gap-2">
+        <label for="sort-select" class="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+          <span>Sort by:</span>
+        </label>
+        <select id="sort-select" onchange="performSearch()" class="bg-white border border-slate-200 hover:border-slate-300 text-slate-800 text-xs font-semibold rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-500 shadow-xs cursor-pointer">
+          <option value="date_desc" selected>🕒 Most Recently Updated</option>
+          <option value="relevance">🎯 Best Match (Relevance)</option>
+          <option value="price_asc">💲 Price: Low to High</option>
+          <option value="price_desc">💲 Price: High to Low</option>
+          <option value="date_asc">⏳ Oldest Updated First</option>
+        </select>
       </div>
     </div>
 
@@ -363,9 +372,10 @@
       
       <!-- Modal Header -->
       <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
           <span id="modal-sheet-badge" class="px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider"></span>
           <span id="modal-avail-badge" class="px-2.5 py-1 rounded-md text-xs font-semibold"></span>
+          <span id="modal-date-badge" class="px-2.5 py-1 rounded-md text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200 hidden"></span>
         </div>
         <button onclick="closeDetailModal()" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-200 transition">
           ✕
@@ -393,11 +403,15 @@
           <div id="modal-desc" class="p-4 bg-slate-50 border border-slate-200 rounded-xl whitespace-pre-wrap font-sans text-slate-700 leading-relaxed text-xs sm:text-sm"></div>
         </div>
 
-        <!-- Source / Broker -->
+        <!-- Source / Broker / Date -->
         <div class="flex flex-wrap items-center gap-4 text-xs">
           <div>
             <span class="text-slate-400 font-medium">Source / Listing:</span>
             <span id="modal-source" class="font-bold text-slate-800 ml-1"></span>
+          </div>
+          <div id="modal-date-container" class="hidden">
+            <span class="text-slate-400 font-medium">Last Updated:</span>
+            <span id="modal-date" class="font-bold text-slate-800 ml-1"></span>
           </div>
           <div id="modal-listing-id-container">
             <span class="text-slate-400 font-medium">Listing ID:</span>
@@ -688,6 +702,7 @@
       document.getElementById('min-price-input').value = '';
       document.getElementById('max-price-input').value = '';
       document.getElementById('fuzzy-checkbox').checked = false;
+      if (document.getElementById('sort-select')) document.getElementById('sort-select').value = 'date_desc';
       setBedroomFilter('all');
       setSheetFilter('all');
     }
@@ -717,6 +732,7 @@
       const category = document.getElementById('category-select') ? document.getElementById('category-select').value : 'all';
       const minPrice = document.getElementById('min-price-input') ? document.getElementById('min-price-input').value.trim() : '';
       const maxPrice = document.getElementById('max-price-input') ? document.getElementById('max-price-input').value.trim() : '';
+      const sort = document.getElementById('sort-select') ? document.getElementById('sort-select').value : 'date_desc';
       const fuzzy = document.getElementById('fuzzy-checkbox').checked;
 
       // Update active filters badge
@@ -742,6 +758,7 @@
         direct: direct,
         min_price: minPrice,
         max_price: maxPrice,
+        sort: sort,
         fuzzy: fuzzy ? 'true' : 'false',
         limit: '150'
       });
@@ -853,10 +870,17 @@
             <!-- Card Header -->
             <div class="p-5 pb-3">
               <div class="flex items-center justify-between gap-2 mb-2.5">
-                <span class="px-2 py-0.5 rounded text-[11px] font-black tracking-wider ${sheetBadgeClass}">
-                  ${sheetIcon}
-                </span>
-                <div class="flex items-center gap-1.5">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="px-2 py-0.5 rounded text-[11px] font-black tracking-wider ${sheetBadgeClass}">
+                    ${sheetIcon}
+                  </span>
+                  ${r.date_updated ? `
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200/80" title="Last Updated: ${escapeHtml(r.date_updated)}">
+                      🕒 ${escapeHtml(r.date_updated)}
+                    </span>
+                  ` : ''}
+                </div>
+                <div class="flex items-center gap-1.5 flex-wrap">
                   ${bedBadge}
                   ${directBadge}
                   <span class="px-2 py-0.5 rounded text-[11px] font-bold ${availBadgeClass}">
@@ -945,6 +969,24 @@
         listingIdContainer.classList.add('hidden');
       }
 
+      // Date Updated in Modal
+      const dateBadge = document.getElementById('modal-date-badge');
+      const dateContainer = document.getElementById('modal-date-container');
+      const dateVal = document.getElementById('modal-date');
+      if (prop.date_updated) {
+        if (dateBadge) {
+          dateBadge.innerText = `🕒 ${prop.date_updated}`;
+          dateBadge.classList.remove('hidden');
+        }
+        if (dateContainer && dateVal) {
+          dateVal.innerText = prop.date_updated;
+          dateContainer.classList.remove('hidden');
+        }
+      } else {
+        if (dateBadge) dateBadge.classList.add('hidden');
+        if (dateContainer) dateContainer.classList.add('hidden');
+      }
+
       const photosContainer = document.getElementById('modal-photos-container');
       const photosLink = document.getElementById('modal-photos-link');
       if (prop.photos && prop.photos.startsWith('http')) {
@@ -975,7 +1017,7 @@
     function copyPropertySnippet(index) {
       const p = allResults[index];
       if (!p) return;
-      const snippet = `📍 ${p.unit_no_address || ''} (${p.sheet_source || ''})\n💰 Price: ${p.price || ''}\n🟢 Status: ${p.availability || ''}\n👤 Source: ${p.source_or_listing || ''}\n\n📝 Details:\n${p.property_description || ''}`;
+      const snippet = `📍 ${p.unit_no_address || ''} (${p.sheet_source || ''})\n💰 Price: ${p.price || ''}\n🟢 Status: ${p.availability || ''}\n👤 Source: ${p.source_or_listing || ''}${p.date_updated ? `\n🕒 Updated: ${p.date_updated}` : ''}\n\n📝 Details:\n${p.property_description || ''}`;
       navigator.clipboard.writeText(snippet);
       alert("Property summary copied to clipboard!");
     }
@@ -983,7 +1025,7 @@
     function copyCurrentModalDetails() {
       if (!activeModalProperty) return;
       const p = activeModalProperty;
-      const snippet = `📍 ${p.unit_no_address || ''} (${p.sheet_source || ''})\n💰 Price: ${p.price || ''}\n🟢 Status: ${p.availability || ''}\n👤 Source: ${p.source_or_listing || ''}\n\n📝 Details:\n${p.property_description || ''}\n${p.photos ? `\n📸 Photos: ${p.photos}` : ''}`;
+      const snippet = `📍 ${p.unit_no_address || ''} (${p.sheet_source || ''})\n💰 Price: ${p.price || ''}\n🟢 Status: ${p.availability || ''}\n👤 Source: ${p.source_or_listing || ''}${p.date_updated ? `\n🕒 Updated: ${p.date_updated}` : ''}\n\n📝 Details:\n${p.property_description || ''}\n${p.photos ? `\n📸 Photos: ${p.photos}` : ''}`;
       navigator.clipboard.writeText(snippet);
       alert("Property details copied to clipboard!");
     }

@@ -70,6 +70,7 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
                 sheet = query_params.get("sheet", ["all"])[0]
                 avail = query_params.get("avail", ["all"])[0]
                 direct = query_params.get("direct", ["all"])[0]
+                sort = query_params.get("sort", ["date_desc"])[0]
                 fuzzy = query_params.get("fuzzy", ["false"])[0].lower() == "true"
                 try:
                     limit = int(query_params.get("limit", [150])[0])
@@ -86,6 +87,7 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
                     directness_filter=direct,
                     min_price=min_price,
                     max_price=max_price,
+                    sort_by=sort,
                     limit=limit,
                     enable_fuzzy=fuzzy
                 )
@@ -101,6 +103,7 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
                         "category": category,
                         "min_price": min_price,
                         "max_price": max_price,
+                        "sort": sort,
                         "fuzzy": fuzzy
                     },
                     "total_matches": len(results),

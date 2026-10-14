@@ -25,5 +25,8 @@
   "server": {
     "host": "127.0.0.1",
     "port": 5055
+  },
+  "cloud_deploy": {
+    "url": "https://cai-property-search.onrender.com"
   }
 }

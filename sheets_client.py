@@ -13,7 +13,7 @@ import os
 import re
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Any, Optional
 
 try:
@@ -30,6 +30,66 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
     "https://www.googleapis.com/auth/drive.readonly"
 ]
+
+
+def parse_date_updated(val: Any) -> Tuple[str, str]:
+    """
+    Parses various date formats into (iso_str, display_str).
+    Handles:
+      - '12-Aug-23' -> ('2023-08-12', 'Aug 12, 2023')
+      - 'September 12, 2025' -> ('2025-09-12', 'Sep 12, 2025')
+      - '45915' (Excel serial) -> ('2025-09-15', 'Sep 15, 2025')
+      - '2026-06-05 00:00:00' -> ('2026-06-05', 'Jun 05, 2026')
+    """
+    if not val or not str(val).strip():
+        return "", ""
+    s = str(val).strip()
+    if s.lower() in ["nan", "none", ".", "null", "-", "na", "n/a"]:
+        return "", ""
+
+    # Clean float string representation: '45915.0' -> '45915'
+    if re.match(r"^\d+\.0$", s):
+        s = s.split(".")[0]
+
+    # Excel serial number (35000 is ~1995, 65000 is ~2078)
+    if s.isdigit():
+        try:
+            n = int(s)
+            if 35000 <= n <= 65000:
+                dt = datetime(1899, 12, 30) + timedelta(days=n)
+                return dt.strftime("%Y-%m-%d"), dt.strftime("%b %d, %Y")
+        except Exception:
+            pass
+
+    # Clean timestamp suffix: e.g. '2026-06-05 00:00:00' -> '2026-06-05'
+    if " " in s and re.match(r"^\d{4}-\d{2}-\d{2}", s):
+        s = s.split(" ")[0]
+
+    formats = [
+        "%d-%b-%y", "%d-%b-%Y", "%d-%B-%y", "%d-%B-%Y",
+        "%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%b %d %Y",
+        "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d",
+        "%d.%m.%Y", "%d-%m-%Y", "%m-%d-%Y"
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(s, fmt)
+            if dt.year < 100:
+                dt = dt.replace(year=dt.year + 2000)
+            return dt.strftime("%Y-%m-%d"), dt.strftime("%b %d, %Y")
+        except ValueError:
+            pass
+
+    # Regex fallback for Month DD, YYYY
+    m = re.search(r"([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})", s)
+    if m:
+        try:
+            dt = datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y")
+            return dt.strftime("%Y-%m-%d"), dt.strftime("%b %d, %Y")
+        except ValueError:
+            pass
+
+    return "", s
 
 
 def extract_spreadsheet_id(url_or_id: str) -> str:
@@ -123,6 +183,20 @@ def normalize_record(raw_dict: Dict[str, Any], sheet_source: str, row_num: int) 
     is_one_away = any(term in check_text for term in ["one away", "1 away", "one-away", "1-away"])
     directness = "One Away" if is_one_away else "Direct"
 
+    # Date Updated extraction (strictly check DATE UPDATED, LAST UPDATED, or DATE)
+    raw_date = ""
+    for cand in ["DATE UPDATED", "LAST UPDATED", "DATE"]:
+        for k_upper, (orig_k, val) in upper_map.items():
+            if (cand == k_upper or cand in k_upper) and val and not "NO." in k_upper:
+                raw_date = val
+                break
+        if raw_date:
+            break
+
+    date_iso, date_display = parse_date_updated(raw_date)
+    # Only keep as date_updated if it parsed as a genuine date
+    clean_date_updated = date_display if date_iso else ""
+
     return {
         "id": f"{sheet_source.lower().replace(' ', '_')}_{row_num}",
         "sheet_source": sheet_source,
@@ -134,6 +208,10 @@ def normalize_record(raw_dict: Dict[str, Any], sheet_source: str, row_num: int) 
         "source_or_listing": source,
         "is_one_away": is_one_away,
         "directness": directness,
+        # Date updated attributes
+        "date_updated": clean_date_updated,
+        "date_updated_iso": date_iso,
+        "date_updated_raw": raw_date,
         # Extended helpful attributes
         "listing_id": listing_id,
         "location": location,
@@ -345,6 +423,8 @@ class SheetsClient:
                 
                 # If first sheet, include header row. If subsequent sheets, keep headers or combine
                 if not combined_rows:
+                    if sheet_rows and len(sheet_rows[0]) > 0 and str(sheet_rows[0][0]).strip() in ['.', '', 'Unnamed: 0', ' ']:
+                        sheet_rows[0][0] = 'DATE UPDATED'
                     combined_rows.extend(sheet_rows)
                 else:
                     # Append data rows
@@ -366,6 +446,8 @@ class SheetsClient:
 
         header_idx = find_header_row_index(raw_rows)
         headers = [str(c).strip() for c in raw_rows[header_idx]]
+        if headers and headers[0] in [".", "", "Unnamed: 0", " "]:
+            headers[0] = "DATE UPDATED"
         
         # Deduplicate headers
         clean_headers = []
