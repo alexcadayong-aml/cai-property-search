@@ -47,6 +47,27 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/search":
                 q = query_params.get("q", [""])[0]
                 sheet = query_params.get("sheet", ["all"])[0]
+                loc = query_params.get("loc", [""])[0]
+                bedrooms = query_params.get("bedrooms", ["all"])[0]
+                category = query_params.get("category", ["all"])[0]
+                min_price_raw = query_params.get("min_price", [""])[0]
+                max_price_raw = query_params.get("max_price", [""])[0]
+
+                min_price = None
+                if min_price_raw:
+                    try:
+                        min_price = float(min_price_raw.replace(",", "").strip())
+                    except ValueError:
+                        pass
+
+                max_price = None
+                if max_price_raw:
+                    try:
+                        max_price = float(max_price_raw.replace(",", "").strip())
+                    except ValueError:
+                        pass
+
+                sheet = query_params.get("sheet", ["all"])[0]
                 avail = query_params.get("avail", ["all"])[0]
                 direct = query_params.get("direct", ["all"])[0]
                 fuzzy = query_params.get("fuzzy", ["false"])[0].lower() == "true"
@@ -57,16 +78,31 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
 
                 results = search_engine.search(
                     query=q,
+                    location_query=loc,
+                    bedroom_filter=bedrooms,
+                    category_filter=category,
                     sheet_filter=sheet,
                     availability_filter=avail,
                     directness_filter=direct,
+                    min_price=min_price,
+                    max_price=max_price,
                     limit=limit,
                     enable_fuzzy=fuzzy
                 )
 
                 response_data = {
                     "query": q,
-                    "filters": {"sheet": sheet, "availability": avail, "direct": direct, "fuzzy": fuzzy},
+                    "location_query": loc,
+                    "filters": {
+                        "sheet": sheet,
+                        "availability": avail,
+                        "direct": direct,
+                        "bedrooms": bedrooms,
+                        "category": category,
+                        "min_price": min_price,
+                        "max_price": max_price,
+                        "fuzzy": fuzzy
+                    },
                     "total_matches": len(results),
                     "results": results
                 }

@@ -139,6 +139,9 @@ def main():
     parser.add_argument("--status", action="store_true", help="Display Google connection & permission status")
     parser.add_argument("--server", action="store_true", help="Launch the Web Dashboard server")
     parser.add_argument("--login-sync", action="store_true", help="Authenticate with your Google Account (alexiscadayong@gmail.com) in Chrome and sync live private sheets")
+    parser.add_argument("--loc", default="", help="Filter specifically by location / city / area (e.g. 'Taguig', 'Makati', 'BGC')")
+    parser.add_argument("--bedrooms", default="all", help="Filter by bedroom count: studio, 1, 2, 3, 4+")
+    parser.add_argument("--category", default="all", help="Filter by category: condo, house, office, commercial")
     parser.add_argument("-i", "--interactive", action="store_true", help="Launch interactive search mode")
     parser.add_argument("--port", type=int, default=5055, help="Web server port (default 5055)")
 
@@ -213,6 +216,9 @@ def main():
 
     results = engine.search(
         query=args.query,
+        location_query=args.loc,
+        bedroom_filter=args.bedrooms,
+        category_filter=args.category,
         sheet_filter=sheet_map.get(args.sheet, "all"),
         availability_filter=args.avail,
         directness_filter=directness_filter,
@@ -223,7 +229,12 @@ def main():
     if args.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))
     else:
-        display_results(results, args.query)
+        q_label = f"'{args.query}'" if args.query else ""
+        if args.loc:
+            q_label += f" in '{args.loc}'"
+        if args.bedrooms != "all":
+            q_label += f" [{args.bedrooms} BR]"
+        display_results(results, q_label.strip())
 
 
 if __name__ == "__main__":
