@@ -11,26 +11,61 @@ import sys
 import json
 import requests
 
-CACHE_FILE = "sheets_cache.json"
-CONFIG_FILE = "config.json"
+CACHE_FILE = os.path.join(os.path.dirname(__file__), "sheets_cache.json")
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 
 
-def push():
-    if not os.path.exists(CACHE_FILE):
-        print("❌ Error: sheets_cache.json not found. Run sync first.")
-        return False
-
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
+def get_cloud_url():
+    cfg = {}
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
 
     cloud_url = cfg.get("cloud_deploy", {}).get("url", "").rstrip("/")
-    if not cloud_url:
-        print("⚠️ No cloud URL configured yet.")
-        print("Once your website is deployed (e.g. on Render), add its URL to config.json:")
-        print('  "cloud_deploy": { "url": "https://cai-property-search.onrender.com" }')
+    if cloud_url:
+        return cloud_url
+
+    # Check environment variable
+    cloud_url = os.environ.get("CLOUD_URL", "").rstrip("/")
+    if cloud_url:
+        return cloud_url
+
+    # Ask user interactively if running in terminal
+    try:
+        print("\n" + "=" * 60)
+        print("🌐 RENDER CLOUD SETUP")
+        print("Please enter your live website URL from Render")
+        print("Example: https://cai-property-search.onrender.com")
+        print("=" * 60)
+        user_url = input("Render URL: ").strip().rstrip("/")
+        if user_url:
+            if "cloud_deploy" not in cfg:
+                cfg["cloud_deploy"] = {}
+            cfg["cloud_deploy"]["url"] = user_url
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+            print(f"✅ Saved website URL to config.json!")
+            return user_url
+    except Exception:
+        pass
+
+    return ""
+
+
+def push(cloud_url=None):
+    if not os.path.exists(CACHE_FILE):
+        print(f"❌ Error: {CACHE_FILE} not found. Run sync first.")
         return False
 
-    print(f"🚀 Pushing local property database to {cloud_url}...")
+    if not cloud_url:
+        cloud_url = get_cloud_url()
+
+    if not cloud_url:
+        print("⚠️ No cloud URL configured. Skipping cloud push.")
+        print("You can add it anytime to config.json under 'cloud_deploy': { 'url': '...' }")
+        return False
+
+    print(f"\n🚀 Pushing property database to {cloud_url}...")
     with open(CACHE_FILE, "r", encoding="utf-8") as f:
         cache_data = json.load(f)
 
