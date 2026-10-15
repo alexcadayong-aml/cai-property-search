@@ -158,7 +158,7 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
             # API: Google Quota status
             elif path == "/api/quota":
                 quota_status = internet_scanner.quota_tracker.get_status()
-                quota_status["has_google_key"] = bool(internet_scanner.get_config("serper_api_key") or internet_scanner.get_config("google_api_key"))
+                quota_status["has_google_key"] = bool(internet_scanner.get_config("tavily_api_key") or internet_scanner.get_config("serper_api_key") or internet_scanner.get_config("google_api_key"))
                 body_bytes = json.dumps(quota_status, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -257,7 +257,7 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
                 new_cfg = json.loads(body)
 
                 # 1. Update radar / internet scanner credentials if provided
-                has_radar_keys = any(k in new_cfg for k in ["google_api_key", "google_cse_id", "serper_api_key", "radar_access_key"])
+                has_radar_keys = any(k in new_cfg for k in ["google_api_key", "google_cse_id", "serper_api_key", "tavily_api_key", "radar_access_key"])
                 if has_radar_keys:
                     expected_key = internet_scanner.get_config("radar_access_key")
                     req_key = new_cfg.get("current_passcode", "") or new_cfg.get("radar_access_key", "")
@@ -269,7 +269,7 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
                         self.end_headers()
                         self.wfile.write(json.dumps(resp, ensure_ascii=False).encode("utf-8"))
                         return
-                    for k in ["google_api_key", "google_cse_id", "serper_api_key", "radar_access_key"]:
+                    for k in ["google_api_key", "google_cse_id", "serper_api_key", "tavily_api_key", "radar_access_key"]:
                         if k in new_cfg and new_cfg[k] is not None:
                             internet_scanner.set_config(k, new_cfg[k])
 

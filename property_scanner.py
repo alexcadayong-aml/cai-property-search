@@ -127,6 +127,7 @@ class PropertyInternetScanner:
             "google_api_key": "GOOGLE_API_KEY",
             "google_cse_id": "GOOGLE_CSE_ID",
             "serper_api_key": "SERPER_API_KEY",
+            "tavily_api_key": "TAVILY_API_KEY",
             "radar_access_key": "RADAR_ACCESS_KEY"
         }
         env_var = env_map.get(key)
@@ -713,18 +714,104 @@ class PropertyInternetScanner:
 
         return results
 
-    def scan_google_portals(self, query):
-        """Dispatches to Serper.dev Google Search or legacy Google Custom Search."""
+    def scan_tavily_portals(self, query):
+        """Queries Tavily Search API (1,000 free searches every month, recurring)."""
         if not self.session:
             return []
-        serper_key = self.get_config("serper_api_key")
-        api_key = self.get_config("google_api_key")
-        cse_id = self.get_config("google_cse_id")
+        tavily_key = self.get_config("tavily_api_key") or self.get_config("google_api_key")
+        if not tavily_key:
+            return []
 
-        # If Serper key or standalone API key without CSE ID is present, use Serper
+        results = []
+        try:
+            url = "https://api.tavily.com/search"
+            payload = {
+                "api_key": tavily_key.strip(),
+                "query": query,
+                "include_domains": ["lamudi.com.ph", "dotproperty.com.ph", "hoppler.com.ph", "property24.com.ph", "rentpad.com.ph"],
+                "search_depth": "basic",
+                "max_results": 10
+            }
+            resp = self.session.post(url, json=payload, timeout=10)
+            if resp.status_code != 200:
+                print(f"Tavily API returned status {resp.status_code}: {resp.text[:120]}", file=sys.stderr)
+                return []
+
+            data = resp.json()
+            items = data.get("results", [])
+
+            for it in items:
+                title = it.get("title", "")
+                link = it.get("url", "")
+                snippet = it.get("content", "")
+
+                domain = urllib.parse.urlparse(link).netloc.lower()
+                platform = "Portal Listing"
+                if "lamudi.com" in domain:
+                    platform = "Lamudi Philippines"
+                elif "dotproperty.com" in domain:
+                    platform = "Dot Property"
+                elif "hoppler.com" in domain:
+                    platform = "Hoppler Luxury"
+                elif "property24.com" in domain:
+                    platform = "Property24 PH"
+                elif "rentpad.com" in domain:
+                    platform = "Rentpad PH"
+                elif "carousell.com" in domain:
+                    continue
+
+                price_val, price_fmt = self.parse_price(title)
+                if price_val == 0.0:
+                    price_val, price_fmt = self.parse_price(snippet)
+
+                sqm = self.parse_sqm(title) or self.parse_sqm(snippet)
+                bedrooms = self.parse_bedrooms(title) or self.parse_bedrooms(snippet)
+                unit_type = self.parse_unit_type(title + " " + snippet)
+                category = self.parse_category(title + " " + snippet)
+
+                clean_title = re.sub(r'\s*[-|]\s*(?:Lamudi|Dot Property|Hoppler|Property24).*$', '', title, flags=re.I).strip()
+
+                results.append({
+                    "id": f"portal-{abs(hash(link)) % 1000000}",
+                    "title": clean_title[:140],
+                    "platform": platform,
+                    "source": "Google Verified Index",
+                    "url": link,
+                    "price": price_val,
+                    "price_formatted": price_fmt,
+                    "bedrooms": bedrooms,
+                    "floor_area_sqm": sqm,
+                    "price_per_sqm": round(price_val / sqm, 2) if sqm > 0 and price_val > 0 else 0,
+                    "unit_type": unit_type,
+                    "category": category,
+                    "parking": "Included" if "parking" in snippet.lower() else "Not specified",
+                    "is_direct": "direct" in snippet.lower() or "owner" in snippet.lower(),
+                    "score": 40 if price_val > 0 else 20,
+                    "snippet": snippet[:260].replace('\n', ' ')
+                })
+        except Exception as e:
+            print(f"Error querying Tavily Search: {e}", file=sys.stderr)
+
+        return results
+
+    def scan_google_portals(self, query):
+        """Dispatches to Tavily, Serper.dev, or legacy Google Custom Search."""
+        if not self.session:
+            return []
+        serper_key = (self.get_config("serper_api_key") or "").strip()
+        tavily_key = (self.get_config("tavily_api_key") or "").strip()
+        api_key = (self.get_config("google_api_key") or "").strip()
+        cse_id = (self.get_config("google_cse_id") or "").strip()
+
+        # 1. Tavily (keys start with tvly-)
+        if tavily_key or api_key.startswith("tvly-"):
+            return self.scan_tavily_portals(query)
+
+        # 2. Serper (default modern Google Search API)
         if serper_key or (api_key and not cse_id):
             return self.scan_serper_portals(query)
 
+        # 3. Legacy Google Custom Search
         if not api_key or not cse_id:
             return []
 
@@ -821,7 +908,7 @@ class PropertyInternetScanner:
         google_items = []
         quota_status = self.quota_tracker.get_status()
         google_limit_reached = quota_status['is_exhausted']
-        has_google_key = bool(self.get_config("serper_api_key") or self.get_config("google_api_key"))
+        has_google_key = bool(self.get_config("tavily_api_key") or self.get_config("serper_api_key") or self.get_config("google_api_key"))
 
         if is_authorized and has_google_key and not google_limit_reached:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍  [CH-G: GOOGLE PORTALS] ({quota_status['count']}/{quota_status['limit']}) Querying Lamudi, Dot Property, Hoppler...", flush=True)
@@ -1429,33 +1516,52 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         <p class="text-[11px] text-slate-400">Protects your 100 daily searches from unauthorized public users. Keep this saved in your browser across your devices (phone, laptop, tablet).</p>
       </div>
 
-      <!-- Google Search API Credentials -->
+      <!-- Google & Portal Search API Credentials -->
       <div class="space-y-3 pt-2 border-t border-slate-800">
         <div class="flex items-center justify-between">
           <h4 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-            <i class="fa-brands fa-google text-blue-400"></i> Google Portal Search API Key
+            <i class="fa-brands fa-google text-blue-400"></i> Portal Search Engine API Key
           </h4>
-          <span class="text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded font-mono font-bold">2,500 FREE SEARCHES</span>
+          <span class="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded font-mono font-bold">100% FREE ($0 COST)</span>
         </div>
 
         <div class="space-y-1.5">
-          <label class="block text-xs font-medium text-slate-300">API Key (from Serper.dev or Google)</label>
-          <input type="password" id="inputGoogleApiKey" placeholder="Paste your API key here..." class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono" />
+          <label class="block text-xs font-medium text-slate-300">API Key (Serper.dev or Tavily)</label>
+          <input type="password" id="inputGoogleApiKey" placeholder="Paste your Serper or Tavily key here..." class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono" />
         </div>
 
-        <div class="bg-indigo-950/40 border border-indigo-500/30 rounded-xl p-3 text-[11px] text-slate-300 space-y-1.5">
-          <p class="font-bold text-white flex items-center gap-1.5">
-            <i class="fa-solid fa-bolt text-amber-400"></i> How to get your free key in 30 seconds:
-          </p>
-          <ol class="list-decimal list-inside space-y-1 text-slate-300 pl-1">
-            <li>Open <a href="https://serper.dev" target="_blank" class="text-indigo-400 underline font-semibold">serper.dev</a> in your browser.</li>
-            <li>Click <strong>"Sign up"</strong> and choose <strong>"Continue with Google"</strong>.</li>
-            <li>On the dashboard, click <strong>"Copy"</strong> next to <strong>"Your API Key"</strong> and paste it above!</li>
-          </ol>
-          <p class="text-[10px] text-slate-400 pt-1">
-            * 100% Free: Delivers real Google results across Lamudi, Dot Property, Hoppler, Property24, and Rentpad. No credit card required.
-          </p>
+        <!-- 2 Free Options Cards -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+          <!-- Option A: Serper.dev -->
+          <div class="bg-indigo-950/40 border border-indigo-500/30 rounded-xl p-3 text-[11px] text-slate-300 space-y-1.5">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-white flex items-center gap-1"><i class="fa-solid fa-bolt text-amber-400"></i> Serper.dev</span>
+              <span class="text-[9px] bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded font-bold">2,500 FREE</span>
+            </div>
+            <p class="text-[10px] text-slate-400">2,500 searches one-time starter pack. Does not expire until used up.</p>
+            <ol class="list-decimal list-inside space-y-0.5 text-slate-300 text-[10.5px]">
+              <li>Go to <a href="https://serper.dev" target="_blank" class="text-indigo-400 underline font-semibold">serper.dev</a> & sign in with Google</li>
+              <li>Click <strong>Copy</strong> next to API Key & paste above</li>
+            </ol>
+          </div>
+
+          <!-- Option B: Tavily -->
+          <div class="bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-3 text-[11px] text-slate-300 space-y-1.5">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-white flex items-center gap-1"><i class="fa-solid fa-arrows-rotate text-emerald-400"></i> Tavily.com</span>
+              <span class="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-bold">1,000/MO RECURRING</span>
+            </div>
+            <p class="text-[10px] text-slate-400">Renews automatically to 1,000 free searches on the 1st of every month.</p>
+            <ol class="list-decimal list-inside space-y-0.5 text-slate-300 text-[10.5px]">
+              <li>Go to <a href="https://tavily.com" target="_blank" class="text-emerald-400 underline font-semibold">tavily.com</a> & sign in with Google</li>
+              <li>Copy key starting with <code class="text-emerald-300 bg-emerald-950 px-1 rounded">tvly-</code> & paste above</li>
+            </ol>
+          </div>
         </div>
+
+        <p class="text-[10px] text-slate-400">
+          * Both options require <strong>no credit card</strong>, cost <strong>$0</strong>, and immediately index Lamudi, Dot Property, Hoppler, Property24, and Rentpad.
+        </p>
 
         <!-- Optional Legacy Google CX -->
         <details class="text-xs text-slate-400 pt-1">
@@ -2256,7 +2362,7 @@ class ScannerHTTPHandler(BaseHTTPRequestHandler):
 
             elif path == "/api/quota":
                 status = self.scanner.quota_tracker.get_status()
-                status["has_google_key"] = bool(self.scanner.get_config("serper_api_key") or self.scanner.get_config("google_api_key"))
+                status["has_google_key"] = bool(self.scanner.get_config("tavily_api_key") or self.scanner.get_config("serper_api_key") or self.scanner.get_config("google_api_key"))
                 body = json.dumps(status, ensure_ascii=False).encode('utf-8')
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -2306,7 +2412,7 @@ class ScannerHTTPHandler(BaseHTTPRequestHandler):
                     resp = {"success": False, "error": "Invalid access passcode"}
                     status_code = 401
                 else:
-                    for k in ["google_api_key", "google_cse_id", "serper_api_key", "radar_access_key"]:
+                    for k in ["google_api_key", "google_cse_id", "serper_api_key", "tavily_api_key", "radar_access_key"]:
                         if k in data and data[k] is not None:
                             self.scanner.set_config(k, data[k])
                     resp = {"success": True, "quota": self.scanner.quota_tracker.get_status()}
