@@ -146,6 +146,8 @@ class PropertyInternetScanner:
 
         if key == "radar_access_key":
             return os.environ.get("ADMIN_KEY", "cai2026")
+        if key in ["tavily_api_key", "google_api_key"]:
+            return "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"
         return default
 
     def set_config(self, key, value):
