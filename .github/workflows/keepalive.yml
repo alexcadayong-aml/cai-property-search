@@ -1,0 +1,17 @@
+name: 24-7 Cloud Keep-Alive
+
+on:
+  schedule:
+    # Ping every 10 minutes to prevent Render free instance from sleeping
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render Cloud Service
+        run: |
+          echo "Pinging live Property Radar & Search engine to keep instance awake 24/7..."
+          curl -s -f -m 30 "https://cai-property-search.onrender.com/api/status" || echo "Status ping failed"
+          curl -s -f -m 30 "https://cai-property-search.onrender.com/radar" > /dev/null || echo "Radar ping failed"
