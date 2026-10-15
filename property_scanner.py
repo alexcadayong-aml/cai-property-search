@@ -630,11 +630,11 @@ class PropertyInternetScanner:
     # -------------------------------------------------------------
     # 5. Google / Serper Deep Search (Strategy 1: Direct Portal Indexing)
     # -------------------------------------------------------------
-    def scan_serper_portals(self, query):
+    def scan_serper_portals(self, query, api_key=""):
         """Strategy 1 (Primary): Queries Serper.dev Google Search API for verified listings on Lamudi, Dot Property, Hoppler, Property24, Rentpad."""
         if not self.session:
             return []
-        serper_key = self.get_config("serper_api_key") or self.get_config("google_api_key")
+        serper_key = (api_key or "").strip() or self.get_config("serper_api_key") or self.get_config("google_api_key")
         if not serper_key:
             return []
 
@@ -714,11 +714,11 @@ class PropertyInternetScanner:
 
         return results
 
-    def scan_tavily_portals(self, query):
+    def scan_tavily_portals(self, query, api_key=""):
         """Queries Tavily Search API (1,000 free searches every month, recurring)."""
         if not self.session:
             return []
-        tavily_key = self.get_config("tavily_api_key") or self.get_config("google_api_key")
+        tavily_key = (api_key or "").strip() or self.get_config("tavily_api_key") or self.get_config("google_api_key")
         if not tavily_key:
             return []
 
@@ -794,25 +794,26 @@ class PropertyInternetScanner:
 
         return results
 
-    def scan_google_portals(self, query):
+    def scan_google_portals(self, query, api_key=""):
         """Dispatches to Tavily, Serper.dev, or legacy Google Custom Search."""
         if not self.session:
             return []
         serper_key = (self.get_config("serper_api_key") or "").strip()
         tavily_key = (self.get_config("tavily_api_key") or "").strip()
-        api_key = (self.get_config("google_api_key") or "").strip()
+        cfg_api_key = (self.get_config("google_api_key") or "").strip()
+        key_to_use = (api_key or "").strip() or tavily_key or serper_key or cfg_api_key
         cse_id = (self.get_config("google_cse_id") or "").strip()
 
         # 1. Tavily (keys start with tvly-)
-        if tavily_key or api_key.startswith("tvly-"):
-            return self.scan_tavily_portals(query)
+        if tavily_key or key_to_use.startswith("tvly-"):
+            return self.scan_tavily_portals(query, api_key=key_to_use)
 
         # 2. Serper (default modern Google Search API)
-        if serper_key or (api_key and not cse_id):
-            return self.scan_serper_portals(query)
+        if serper_key or (key_to_use and not cse_id):
+            return self.scan_serper_portals(query, api_key=key_to_use)
 
         # 3. Legacy Google Custom Search
-        if not api_key or not cse_id:
+        if not key_to_use or not cse_id:
             return []
 
         results = []
@@ -895,7 +896,7 @@ class PropertyInternetScanner:
 
         return results
 
-    def run_scan(self, query="Proscenium 2 bedroom for sale", filter_sale=False, access_key=""):
+    def run_scan(self, query="Proscenium 2 bedroom for sale", filter_sale=False, access_key="", api_key=""):
         start_time = time.time()
         now_str = datetime.now().strftime("%H:%M:%S")
         print(f"\n[{now_str}] 🛰️  [SCAN START] Initiating multi-channel search for: '{query}'...", flush=True)
@@ -904,17 +905,21 @@ class PropertyInternetScanner:
         expected_key = self.get_config("radar_access_key")
         is_authorized = not expected_key or (access_key and access_key.strip() == expected_key.strip())
 
-        # Strategy 1: Google Custom Search / Serper API with Quota Tracking & Hard Stop at 100
+        # Strategy 1: Google Custom Search / Serper / Tavily API with Quota Tracking & Hard Stop at 100
         google_items = []
         quota_status = self.quota_tracker.get_status()
         google_limit_reached = quota_status['is_exhausted']
-        has_google_key = bool(self.get_config("tavily_api_key") or self.get_config("serper_api_key") or self.get_config("google_api_key"))
+        effective_key = (api_key or "").strip() or self.get_config("tavily_api_key") or self.get_config("serper_api_key") or self.get_config("google_api_key")
+        has_google_key = bool(effective_key)
 
         if is_authorized and has_google_key and not google_limit_reached:
+            if api_key and api_key.strip() and not self.get_config("google_api_key"):
+                self.set_config("google_api_key", api_key.strip())
+
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍  [CH-G: GOOGLE PORTALS] ({quota_status['count']}/{quota_status['limit']}) Querying Lamudi, Dot Property, Hoppler...", flush=True)
             allowed, quota_status = self.quota_tracker.increment()
             if allowed:
-                google_items = self.scan_google_portals(query)
+                google_items = self.scan_google_portals(query, api_key=effective_key)
                 print(f"[{datetime.now().strftime('%H:%M:%S')}]     -> Found {len(google_items)} verified portal listings via Google.", flush=True)
         elif google_limit_reached:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑  [HARD STOP] Daily limit (100/100) reached. Google search halted to guarantee $0 cost.", flush=True)
@@ -1720,6 +1725,10 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       return localStorage.getItem('radar_passcode') || 'cai2026';
     }
 
+    function getStoredApiKey() {
+      return localStorage.getItem('radar_api_key') || '';
+    }
+
     function togglePasscodeVisibility() {
       const input = document.getElementById('inputPasscode');
       const eye = document.getElementById('btnPasscodeEye');
@@ -1735,6 +1744,8 @@ HTML_DASHBOARD = """<!DOCTYPE html>
     function openSettingsModal() {
       const input = document.getElementById('inputPasscode');
       if (input) input.value = getStoredPasscode();
+      const apiInput = document.getElementById('inputGoogleApiKey');
+      if (apiInput && !apiInput.value) apiInput.value = getStoredApiKey();
       fetchQuota();
       document.getElementById('settingsModal').classList.remove('hidden');
     }
@@ -1745,7 +1756,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
 
     async function fetchQuota() {
       try {
-        const res = await fetch('/api/quota?key=' + encodeURIComponent(getStoredPasscode()));
+        const res = await fetch('/api/quota?key=' + encodeURIComponent(getStoredPasscode()) + '&api_key=' + encodeURIComponent(getStoredApiKey()));
         if (!res.ok) return;
         const q = await res.json();
         updateQuotaDisplay(q);
@@ -1817,6 +1828,9 @@ HTML_DASHBOARD = """<!DOCTYPE html>
 
       if (passcode) {
         localStorage.setItem('radar_passcode', passcode);
+      }
+      if (apiKey) {
+        localStorage.setItem('radar_api_key', apiKey);
       }
 
       const payload = {
@@ -2023,7 +2037,8 @@ HTML_DASHBOARD = """<!DOCTYPE html>
 
       try {
         const passcode = getStoredPasscode();
-        const res = await fetch(`/api/scan?q=${encodeURIComponent(q)}&key=${encodeURIComponent(passcode)}`);
+        const storedApiKey = getStoredApiKey();
+        const res = await fetch(`/api/scan?q=${encodeURIComponent(q)}&key=${encodeURIComponent(passcode)}&api_key=${encodeURIComponent(storedApiKey)}`);
         const data = await res.json();
         currentData = data;
         updateUI(data);
@@ -2381,7 +2396,8 @@ class ScannerHTTPHandler(BaseHTTPRequestHandler):
             elif path == "/api/scan":
                 q = qs.get("q", ["Proscenium 2 bedroom for sale"])[0]
                 key = qs.get("key", [""])[0]
-                scan_data = self.scanner.run_scan(query=q, access_key=key)
+                api_key = qs.get("api_key", [""])[0]
+                scan_data = self.scanner.run_scan(query=q, access_key=key, api_key=api_key)
                 body = json.dumps(scan_data, ensure_ascii=False).encode('utf-8')
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -2393,7 +2409,8 @@ class ScannerHTTPHandler(BaseHTTPRequestHandler):
 
             elif path == "/api/quota":
                 status = self.scanner.quota_tracker.get_status()
-                status["has_google_key"] = bool(self.scanner.get_config("tavily_api_key") or self.scanner.get_config("serper_api_key") or self.scanner.get_config("google_api_key"))
+                api_key = qs.get("api_key", [""])[0]
+                status["has_google_key"] = bool(api_key or self.scanner.get_config("tavily_api_key") or self.scanner.get_config("serper_api_key") or self.scanner.get_config("google_api_key"))
                 body = json.dumps(status, ensure_ascii=False).encode('utf-8')
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")

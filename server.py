@@ -145,7 +145,8 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
             elif path in ["/api/scan", "/api/scan-internet"]:
                 q = query_params.get("q", ["Proscenium 2 bedroom for sale"])[0]
                 key = query_params.get("key", [""])[0]
-                scan_res = internet_scanner.run_scan(query=q, access_key=key)
+                api_key = query_params.get("api_key", [""])[0]
+                scan_res = internet_scanner.run_scan(query=q, access_key=key, api_key=api_key)
                 body_bytes = json.dumps(scan_res, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -158,7 +159,8 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
             # API: Google Quota status
             elif path == "/api/quota":
                 quota_status = internet_scanner.quota_tracker.get_status()
-                quota_status["has_google_key"] = bool(internet_scanner.get_config("tavily_api_key") or internet_scanner.get_config("serper_api_key") or internet_scanner.get_config("google_api_key"))
+                api_key = query_params.get("api_key", [""])[0]
+                quota_status["has_google_key"] = bool(api_key or internet_scanner.get_config("tavily_api_key") or internet_scanner.get_config("serper_api_key") or internet_scanner.get_config("google_api_key"))
                 body_bytes = json.dumps(quota_status, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
