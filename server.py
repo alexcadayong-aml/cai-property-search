@@ -19,11 +19,13 @@ if sys.stdout.encoding != 'utf-8':
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from sheets_client import SheetsClient
 from search_engine import PropertySearchEngine
+from property_scanner import PropertyInternetScanner, HTML_DASHBOARD, get_lan_ip
 
 # Global instances
 sheets_client = SheetsClient()
 sync_data_cache = sheets_client.sync_data(force_refresh=False)
 search_engine = PropertySearchEngine(sync_data_cache.get("records", []))
+internet_scanner = PropertyInternetScanner()
 
 
 class SearchRequestHandler(BaseHTTPRequestHandler):
@@ -139,8 +141,51 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(body_bytes)
                 return
 
-            # 3. Serve Web UI
-            elif path in ["", "/", "/index.html"]:
+            # 3. API: Internet Scanner (Web & Social Media)
+            elif path in ["/api/scan", "/api/scan-internet"]:
+                q = query_params.get("q", ["Proscenium 2 bedroom for sale"])[0]
+                scan_res = internet_scanner.run_scan(query=q)
+                body_bytes = json.dumps(scan_res, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(body_bytes)
+                return
+
+            # 4. API: Host info
+            elif path == "/api/info":
+                lan_ip = get_lan_ip()
+                port = getattr(self.server, "server_port", 5055)
+                info = {
+                    "lan_ip": lan_ip,
+                    "port": port,
+                    "lan_url": f"http://{lan_ip}:{port}",
+                    "local_url": f"http://localhost:{port}"
+                }
+                body_bytes = json.dumps(info, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(body_bytes)
+                return
+
+            # 5. Serve Property Radar Web App
+            elif path in ["/radar", "/scanner", "/radar/"]:
+                body_bytes = HTML_DASHBOARD.encode('utf-8')
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(body_bytes)
+                return
+
+            # 6. Serve Internal Master Sheets Web UI
+            elif path in ["", "/", "/index.html", "/inventory", "/sheets"]:
                 web_file = os.path.join(os.path.dirname(__file__), "web", "index.html")
                 if os.path.exists(web_file):
                     with open(web_file, "rb") as f:
