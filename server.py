@@ -144,8 +144,22 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
             # 3. API: Internet Scanner (Web & Social Media)
             elif path in ["/api/scan", "/api/scan-internet"]:
                 q = query_params.get("q", ["Proscenium 2 bedroom for sale"])[0]
-                scan_res = internet_scanner.run_scan(query=q)
+                key = query_params.get("key", [""])[0]
+                scan_res = internet_scanner.run_scan(query=q, access_key=key)
                 body_bytes = json.dumps(scan_res, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(body_bytes)
+                return
+
+            # API: Google Quota status
+            elif path == "/api/quota":
+                quota_status = internet_scanner.quota_tracker.get_status()
+                quota_status["has_google_key"] = bool(internet_scanner.get_config("google_api_key") and internet_scanner.get_config("google_cse_id"))
+                body_bytes = json.dumps(quota_status, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body_bytes)))
@@ -241,7 +255,25 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length).decode("utf-8")
                 new_cfg = json.loads(body)
-                
+
+                # 1. Update radar / internet scanner credentials if provided
+                has_radar_keys = any(k in new_cfg for k in ["google_api_key", "google_cse_id", "radar_access_key"])
+                if has_radar_keys:
+                    expected_key = internet_scanner.get_config("radar_access_key")
+                    req_key = new_cfg.get("current_passcode", "") or new_cfg.get("radar_access_key", "")
+                    if expected_key and req_key.strip() != expected_key.strip():
+                        resp = {"success": False, "error": "Invalid access passcode"}
+                        self.send_response(401)
+                        self.send_header("Content-Type", "application/json; charset=utf-8")
+                        self.send_cors_headers()
+                        self.end_headers()
+                        self.wfile.write(json.dumps(resp, ensure_ascii=False).encode("utf-8"))
+                        return
+                    for k in ["google_api_key", "google_cse_id", "radar_access_key"]:
+                        if k in new_cfg and new_cfg[k] is not None:
+                            internet_scanner.set_config(k, new_cfg[k])
+
+                # 2. Update Google Sheets sync config if provided
                 current = sheets_client.config
                 if "sheet_rent" in new_cfg:
                     current["sheet_rent"].update(new_cfg["sheet_rent"])
@@ -250,8 +282,10 @@ class SearchRequestHandler(BaseHTTPRequestHandler):
                 if "auth" in new_cfg:
                     current["auth"].update(new_cfg["auth"])
 
-                sheets_client.save_config(current)
-                resp = {"success": True, "config": current}
+                if any(k in new_cfg for k in ["sheet_rent", "sheet_sale", "auth"]):
+                    sheets_client.save_config(current)
+
+                resp = {"success": True, "config": current, "quota": internet_scanner.quota_tracker.get_status()}
                 status_code = 200
             except Exception as e:
                 resp = {"success": False, "error": str(e)}

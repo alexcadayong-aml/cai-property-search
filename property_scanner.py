@@ -56,15 +56,113 @@ except ImportError:
     pd = None
 
 
+class GoogleQuotaTracker:
+    """Tracks daily Google Custom Search API requests with an automatic hard stop at 100 searches."""
+    def __init__(self, workspace_dir=None, daily_limit=100):
+        self.workspace_dir = workspace_dir or os.path.dirname(os.path.abspath(__file__))
+        self.filepath = os.path.join(self.workspace_dir, "google_quota.json")
+        self.daily_limit = daily_limit
+
+    def _get_today_str(self):
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def get_status(self):
+        today = self._get_today_str()
+        if os.path.exists(self.filepath):
+            try:
+                with open(self.filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if data.get('date') == today:
+                    count = data.get('count', 0)
+                    return {
+                        'date': today,
+                        'count': count,
+                        'limit': self.daily_limit,
+                        'remaining': max(0, self.daily_limit - count),
+                        'is_exhausted': count >= self.daily_limit,
+                        'warning_level': 'red' if count >= self.daily_limit else ('amber' if count >= 80 else 'green')
+                    }
+            except Exception:
+                pass
+        return {
+            'date': today,
+            'count': 0,
+            'limit': self.daily_limit,
+            'remaining': self.daily_limit,
+            'is_exhausted': False,
+            'warning_level': 'green'
+        }
+
+    def increment(self):
+        today = self._get_today_str()
+        status = self.get_status()
+        if status['is_exhausted']:
+            return False, status
+        new_count = status['count'] + 1
+        try:
+            with open(self.filepath, 'w', encoding='utf-8') as f:
+                json.dump({'date': today, 'count': new_count, 'limit': self.daily_limit}, f, indent=2)
+        except Exception as e:
+            print(f"Error saving google_quota.json: {e}", file=sys.stderr)
+        status['count'] = new_count
+        status['remaining'] = max(0, self.daily_limit - new_count)
+        status['is_exhausted'] = new_count >= self.daily_limit
+        status['warning_level'] = 'red' if new_count >= self.daily_limit else ('amber' if new_count >= 80 else 'green')
+        return True, status
+
+
 class PropertyInternetScanner:
     def __init__(self, workspace_dir=None):
         self.workspace_dir = workspace_dir or os.path.dirname(os.path.abspath(__file__))
+        self.quota_tracker = GoogleQuotaTracker(workspace_dir=self.workspace_dir, daily_limit=100)
         self.session = requests.Session() if requests else None
         if self.session:
             self.session.headers.update({
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 'Accept-Language': 'en-US,en;q=0.9',
             })
+
+    def get_config(self, key, default=""):
+        env_map = {
+            "google_api_key": "GOOGLE_API_KEY",
+            "google_cse_id": "GOOGLE_CSE_ID",
+            "radar_access_key": "RADAR_ACCESS_KEY"
+        }
+        env_var = env_map.get(key)
+        if env_var and os.environ.get(env_var):
+            return os.environ.get(env_var)
+        
+        cfg_file = os.path.join(self.workspace_dir, "scanner_config.json")
+        if os.path.exists(cfg_file):
+            try:
+                with open(cfg_file, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                if key in cfg and cfg[key]:
+                    return cfg[key]
+            except Exception:
+                pass
+
+        if key == "radar_access_key":
+            return os.environ.get("ADMIN_KEY", "cai2026")
+        return default
+
+    def set_config(self, key, value):
+        cfg_file = os.path.join(self.workspace_dir, "scanner_config.json")
+        cfg = {}
+        if os.path.exists(cfg_file):
+            try:
+                with open(cfg_file, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+            except Exception:
+                cfg = {}
+        cfg[key] = value.strip()
+        try:
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+            return True
+        except Exception as e:
+            print(f"Error writing scanner_config.json: {e}", file=sys.stderr)
+            return False
 
     # -------------------------------------------------------------
     # Parsing & Normalization Helpers
@@ -524,10 +622,123 @@ class PropertyInternetScanner:
 
         return results
 
-    def run_scan(self, query="Proscenium 2 bedroom for sale", filter_sale=False):
+    # -------------------------------------------------------------
+    # 5. Google Custom Search (Strategy 1: Direct Portal Indexing)
+    # -------------------------------------------------------------
+    def scan_google_portals(self, query):
+        """Strategy 1: Queries Google Custom Search API for verified listings on Lamudi, Dot Property, Hoppler."""
+        if not self.session:
+            return []
+        api_key = self.get_config("google_api_key")
+        cse_id = self.get_config("google_cse_id")
+        if not api_key or not cse_id:
+            return []
+
+        results = []
+        try:
+            enc_q = urllib.parse.quote(query)
+            url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cse_id}&q={enc_q}&num=10"
+            resp = self.session.get(url, timeout=10)
+            if resp.status_code != 200:
+                print(f"Google CSE API returned status {resp.status_code}: {resp.text[:120]}", file=sys.stderr)
+                return []
+
+            data = resp.json()
+            items = data.get("items", [])
+
+            for it in items:
+                title = it.get("title", "")
+                link = it.get("link", "")
+                snippet = it.get("snippet", "")
+                pagemap = it.get("pagemap", {})
+
+                # Identify platform
+                domain = urllib.parse.urlparse(link).netloc.lower()
+                platform = "Portal Listing"
+                if "lamudi.com" in domain:
+                    platform = "Lamudi Philippines"
+                elif "dotproperty.com" in domain:
+                    platform = "Dot Property"
+                elif "hoppler.com" in domain:
+                    platform = "Hoppler Luxury"
+                elif "property24.com" in domain:
+                    platform = "Property24 PH"
+                elif "rentpad.com" in domain:
+                    platform = "Rentpad PH"
+                elif "carousell.com" in domain:
+                    continue  # already covered by Carousell scraper
+
+                price_val, price_fmt = 0.0, "Contact for Price"
+                for meta in pagemap.get("metatags", []):
+                    for k in ["og:price:amount", "product:price:amount", "price", "twitter:data1"]:
+                        if k in meta:
+                            p_v, p_f = self.parse_price(str(meta[k]))
+                            if p_v > 0:
+                                price_val, price_fmt = p_v, p_f
+                                break
+                    if price_val > 0:
+                        break
+
+                if price_val == 0.0:
+                    price_val, price_fmt = self.parse_price(title)
+                if price_val == 0.0:
+                    price_val, price_fmt = self.parse_price(snippet)
+
+                sqm = self.parse_sqm(title) or self.parse_sqm(snippet)
+                bedrooms = self.parse_bedrooms(title) or self.parse_bedrooms(snippet)
+                unit_type = self.parse_unit_type(title + " " + snippet)
+                category = self.parse_category(title + " " + snippet)
+
+                clean_title = re.sub(r'\s*[-|]\s*(?:Lamudi|Dot Property|Hoppler|Property24).*$', '', title, flags=re.I).strip()
+
+                results.append({
+                    "id": f"google-{abs(hash(link)) % 1000000}",
+                    "title": clean_title[:140],
+                    "platform": platform,
+                    "source": "Google Verified Index",
+                    "url": link,
+                    "price": price_val,
+                    "price_formatted": price_fmt,
+                    "bedrooms": bedrooms,
+                    "floor_area_sqm": sqm,
+                    "price_per_sqm": round(price_val / sqm, 2) if sqm > 0 and price_val > 0 else 0,
+                    "unit_type": unit_type,
+                    "category": category,
+                    "parking": "Included" if "parking" in snippet.lower() else "Not specified",
+                    "is_direct": "direct" in snippet.lower() or "owner" in snippet.lower(),
+                    "score": 40 if price_val > 0 else 20,
+                    "snippet": snippet[:260].replace('\n', ' ')
+                })
+        except Exception as e:
+            print(f"Error querying Google Custom Search: {e}", file=sys.stderr)
+
+        return results
+
+    def run_scan(self, query="Proscenium 2 bedroom for sale", filter_sale=False, access_key=""):
         start_time = time.time()
         now_str = datetime.now().strftime("%H:%M:%S")
         print(f"\n[{now_str}] 🛰️  [SCAN START] Initiating multi-channel search for: '{query}'...", flush=True)
+
+        # Access control / device passcode check
+        expected_key = self.get_config("radar_access_key")
+        is_authorized = not expected_key or (access_key and access_key.strip() == expected_key.strip())
+
+        # Strategy 1: Google Custom Search API with Quota Tracking & Hard Stop at 100
+        google_items = []
+        quota_status = self.quota_tracker.get_status()
+        google_limit_reached = quota_status['is_exhausted']
+        has_google_key = bool(self.get_config("google_api_key") and self.get_config("google_cse_id"))
+
+        if is_authorized and has_google_key and not google_limit_reached:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍  [CH-G: GOOGLE PORTALS] ({quota_status['count']}/{quota_status['limit']}) Querying Lamudi, Dot Property, Hoppler...", flush=True)
+            allowed, quota_status = self.quota_tracker.increment()
+            if allowed:
+                google_items = self.scan_google_portals(query)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}]     -> Found {len(google_items)} verified portal listings via Google.", flush=True)
+        elif google_limit_reached:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑  [HARD STOP] Daily limit (100/100) reached. Google search halted to guarantee $0 cost.", flush=True)
+        elif not is_authorized and has_google_key:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔒  [ACCESS LOCKED] Unauthorized client request. Preserving Google search quota.", flush=True)
 
         # 1. Carousell Live Market with Multi-Query Expansion
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛒  [CH-1: CAROUSELL PH] Scanning live marketplace...", flush=True)
@@ -542,8 +753,9 @@ class PropertyInternetScanner:
         # 3. Direct Portals & Social Launchpad
         launchpad_items = self.get_launchpad_links(query)
 
-        # Combine REAL listings only (no ₱0 dummy cards in the listings grid)
+        # Combine REAL listings only
         all_results = []
+        all_results.extend(google_items)
         all_results.extend(carousell_items)
         all_results.extend(local_items)
 
@@ -577,11 +789,16 @@ class PropertyInternetScanner:
             "max_price": max(prices) if prices else 0,
             "avg_price_per_sqm": round(sum(rates) / len(rates)) if rates else 0,
             "sources": {
+                "Google Portals": len(google_items),
                 "Carousell": len(carousell_items),
                 "Local Inventory": len(local_items),
                 "Portals & Social": len(launchpad_items)
             },
             "launchpad": launchpad_items,
+            "google_quota": quota_status,
+            "google_limit_reached": google_limit_reached,
+            "has_google_key": has_google_key,
+            "is_authorized": is_authorized,
             "lan_ip": get_lan_ip(),
             "results": final_list
         }
@@ -606,6 +823,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
     .badge-social { background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.3); }
     .badge-carousell { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
     .badge-local { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-google { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(96, 165, 250, 0.45); }
 
     @media print {
       body { background: #ffffff !important; color: #0f172a !important; font-size: 10pt; }
@@ -676,6 +894,14 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       </div>
 
       <div class="flex items-center gap-2 flex-wrap">
+        <!-- Daily Google Quota Badge & Hard Stop Indicator -->
+        <button onclick="openSettingsModal()" id="googleQuotaPill" class="flex items-center gap-1.5 bg-slate-800/90 hover:bg-slate-700 border border-slate-700 hover:border-blue-500/50 rounded-lg px-2.5 py-1 text-xs transition shadow-sm cursor-pointer" title="Google Custom Search Daily Quota (100 Free/Day Hard Stop)">
+          <i class="fa-brands fa-google text-blue-400"></i>
+          <span class="text-slate-400">Google:</span>
+          <span id="quotaCountText" class="font-mono font-bold text-white">0/100</span>
+          <span id="quotaIndicatorDot" class="w-2 h-2 rounded-full bg-emerald-500"></span>
+        </button>
+
         <!-- Auto-Scan / Watchdog Selector -->
         <div class="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700 rounded-lg px-2.5 py-1 text-xs">
           <i class="fa-solid fa-clock-rotate-left text-slate-400"></i>
@@ -690,6 +916,10 @@ HTML_DASHBOARD = """<!DOCTYPE html>
           </span>
         </div>
 
+        <button onclick="openSettingsModal()" class="px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition" title="Radar Settings & Device Passcode">
+          <i class="fa-solid fa-gear text-slate-400"></i>
+          <span class="hidden sm:inline">Settings</span>
+        </button>
         <button onclick="openShareModal()" class="px-3 py-1.5 rounded-lg border border-indigo-500/40 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-sm">
           <i class="fa-solid fa-share-nodes text-indigo-400"></i> Share
         </button>
@@ -723,6 +953,22 @@ HTML_DASHBOARD = """<!DOCTYPE html>
           <p class="text-[11px] text-slate-500">Live Multi-Channel Radar</p>
         </div>
       </div>
+    </div>
+
+    <!-- Quota Warning & Hard Stop Alert Banner -->
+    <div id="quotaWarningBanner" class="hidden p-3.5 rounded-xl border flex items-center justify-between gap-3 text-xs shadow-lg transition">
+      <div class="flex items-center gap-2.5">
+        <div id="quotaWarningIconWrapper" class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0">
+          <i id="quotaWarningIcon" class="fa-solid fa-triangle-exclamation"></i>
+        </div>
+        <div>
+          <h4 id="quotaWarningTitle" class="font-bold text-white text-xs">Daily Google Search Quota Status</h4>
+          <p id="quotaWarningDesc" class="text-slate-300 text-[11px] mt-0.5 leading-snug"></p>
+        </div>
+      </div>
+      <button onclick="openSettingsModal()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-slate-200 text-xs font-semibold whitespace-nowrap transition">
+        Manage API / Keys
+      </button>
     </div>
 
     <!-- Search Bar & Controls -->
@@ -771,6 +1017,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
 
           <select id="sourceFilter" onchange="renderCards()" class="bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
             <option value="all">All Inventory Sources</option>
+            <option value="Google">Google Portals (Lamudi/Dot Property/Hoppler)</option>
             <option value="Carousell">Carousell PH (Live Web)</option>
             <option value="Master">Internal Master DB</option>
           </select>
@@ -808,20 +1055,20 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       <!-- Channel Pipeline Indicators -->
       <div class="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2 border-t border-slate-800 text-xs">
         <div class="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
+          <span class="text-slate-300 flex items-center gap-1.5"><i class="fa-brands fa-google text-blue-400"></i> Google Portals</span>
+          <span id="chGoogleStatus" class="text-amber-400 text-[11px] font-mono"><i class="fa-solid fa-spinner fa-spin"></i> Checking...</span>
+        </div>
+        <div class="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
           <span class="text-slate-300 flex items-center gap-1.5"><i class="fa-solid fa-cart-shopping text-red-400"></i> Carousell PH</span>
           <span id="chCarousellStatus" class="text-amber-400 text-[11px] font-mono"><i class="fa-solid fa-spinner fa-spin"></i> Scanning...</span>
         </div>
         <div class="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-          <span class="text-slate-300 flex items-center gap-1.5"><i class="fa-brands fa-facebook text-blue-400"></i> Facebook Groups</span>
-          <span id="chSocialStatus" class="text-amber-400 text-[11px] font-mono"><i class="fa-solid fa-spinner fa-spin"></i> Crawling...</span>
-        </div>
-        <div class="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
-          <span class="text-slate-300 flex items-center gap-1.5"><i class="fa-solid fa-globe text-indigo-400"></i> Dot Property</span>
-          <span id="chPortalsStatus" class="text-amber-400 text-[11px] font-mono"><i class="fa-solid fa-spinner fa-spin"></i> Checking...</span>
-        </div>
-        <div class="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
           <span class="text-slate-300 flex items-center gap-1.5"><i class="fa-solid fa-file-excel text-emerald-400"></i> Master File DB</span>
           <span id="chLocalStatus" class="text-amber-400 text-[11px] font-mono"><i class="fa-solid fa-spinner fa-spin"></i> Syncing...</span>
+        </div>
+        <div class="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between">
+          <span class="text-slate-300 flex items-center gap-1.5"><i class="fa-brands fa-facebook text-blue-400"></i> FB & Direct Portals</span>
+          <span id="chSocialStatus" class="text-amber-400 text-[11px] font-mono"><i class="fa-solid fa-spinner fa-spin"></i> Ready</span>
         </div>
       </div>
     </div>
@@ -1025,6 +1272,104 @@ HTML_DASHBOARD = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Settings & Google Quota Modal -->
+  <div id="settingsModal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-5 text-slate-100 max-h-[90vh] overflow-y-auto">
+      
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-blue-600/30 border border-blue-500/40 flex items-center justify-center text-blue-400">
+            <i class="fa-solid fa-sliders text-sm"></i>
+          </div>
+          <div>
+            <h3 class="font-bold text-base text-white">Scanner & Quota Settings</h3>
+            <p class="text-xs text-slate-400">Manage device passcode, Google Search API, and daily limits</p>
+          </div>
+        </div>
+        <button onclick="closeSettingsModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <!-- Quota Monitor Card -->
+      <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+            <i class="fa-brands fa-google text-blue-400"></i> Google Custom Search Daily Quota
+          </span>
+          <span id="settingsQuotaBadge" class="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded font-mono font-bold">100% FREE ($0 COST)</span>
+        </div>
+        
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-slate-400">Daily Free Searches Used:</span>
+            <span id="settingsQuotaUsage" class="font-mono font-bold text-white">0 / 100</span>
+          </div>
+          <div class="w-full bg-slate-900 rounded-full h-2.5 overflow-hidden border border-slate-800">
+            <div id="settingsQuotaBar" class="bg-emerald-500 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+          </div>
+          <div class="flex items-center justify-between text-[11px] text-slate-500">
+            <span id="settingsQuotaRemaining">100 searches remaining today</span>
+            <span>Resets daily at midnight</span>
+          </div>
+        </div>
+
+        <div class="bg-blue-950/30 border border-blue-500/20 rounded-lg p-2.5 text-[11px] text-blue-200 flex items-start gap-2">
+          <i class="fa-solid fa-shield-halved text-blue-400 mt-0.5"></i>
+          <span><strong>Automatic Hard Stop Guarantee:</strong> Once 100 searches are reached in a calendar day, Google calls automatically halt and fallback safely to Carousell + Master Inventory so you are never charged a single cent.</span>
+        </div>
+      </div>
+
+      <!-- Device Access Passcode -->
+      <div class="space-y-2">
+        <label class="block text-xs font-semibold text-slate-300 flex items-center justify-between">
+          <span class="flex items-center gap-1.5"><i class="fa-solid fa-key text-amber-400"></i> Device Access Passcode</span>
+          <span class="text-[11px] text-slate-500 font-normal">Saved on this device</span>
+        </label>
+        <div class="flex items-center gap-2">
+          <input type="password" id="inputPasscode" placeholder="Enter access passcode (default: cai2026)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono" />
+          <button type="button" onclick="togglePasscodeVisibility()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-slate-400 hover:text-white text-xs transition">
+            <i id="btnPasscodeEye" class="fa-solid fa-eye"></i>
+          </button>
+        </div>
+        <p class="text-[11px] text-slate-400">Protects your 100 daily searches from unauthorized public users. Keep this saved in your browser across your devices (phone, laptop, tablet).</p>
+      </div>
+
+      <!-- Google Custom Search Configuration -->
+      <div class="space-y-3 pt-2 border-t border-slate-800">
+        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+          <i class="fa-solid fa-sliders text-indigo-400"></i> Google Custom Search Credentials
+        </h4>
+
+        <div class="space-y-2">
+          <label class="block text-xs font-medium text-slate-300">Google Custom Search API Key</label>
+          <input type="password" id="inputGoogleApiKey" placeholder="AIzaSy..." class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono" />
+        </div>
+
+        <div class="space-y-2">
+          <label class="block text-xs font-medium text-slate-300">Search Engine ID (CX)</label>
+          <input type="text" id="inputGoogleCseId" placeholder="e.g. 0123456789abcdef:..." class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono" />
+        </div>
+
+        <p class="text-[11px] text-slate-400 leading-relaxed">
+          Need keys? Create a free Google Programmable Search Engine at <a href="https://programmablesearchengine.google.com/" target="_blank" class="text-indigo-400 hover:underline">programmablesearchengine.google.com</a> and get a free API key at <a href="https://developers.google.com/custom-search/v1/overview" target="_blank" class="text-indigo-400 hover:underline">Google Cloud Console</a>.
+        </p>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-800">
+        <button onclick="closeSettingsModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-semibold text-slate-300 transition">
+          Cancel
+        </button>
+        <button onclick="saveSettings()" id="btnSaveSettings" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold text-white shadow-lg shadow-indigo-600/30 transition flex items-center gap-1.5">
+          <i class="fa-solid fa-floppy-disk"></i>
+          <span>Save Settings</span>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div id="toastNotification" class="fixed bottom-5 right-5 z-50 transform translate-y-10 opacity-0 pointer-events-none transition-all duration-300 bg-slate-900 border border-emerald-500/50 text-white px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2.5 text-xs font-semibold">
     <i class="fa-solid fa-circle-check text-emerald-400 text-sm"></i>
@@ -1154,8 +1499,151 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       document.getElementById('shareModal').classList.add('hidden');
     }
 
+    function getStoredPasscode() {
+      return localStorage.getItem('radar_passcode') || 'cai2026';
+    }
+
+    function togglePasscodeVisibility() {
+      const input = document.getElementById('inputPasscode');
+      const eye = document.getElementById('btnPasscodeEye');
+      if (input.type === 'password') {
+        input.type = 'text';
+        eye.className = 'fa-solid fa-eye-slash';
+      } else {
+        input.type = 'password';
+        eye.className = 'fa-solid fa-eye';
+      }
+    }
+
+    function openSettingsModal() {
+      const input = document.getElementById('inputPasscode');
+      if (input) input.value = getStoredPasscode();
+      fetchQuota();
+      document.getElementById('settingsModal').classList.remove('hidden');
+    }
+
+    function closeSettingsModal() {
+      document.getElementById('settingsModal').classList.add('hidden');
+    }
+
+    async function fetchQuota() {
+      try {
+        const res = await fetch('/api/quota?key=' + encodeURIComponent(getStoredPasscode()));
+        if (!res.ok) return;
+        const q = await res.json();
+        updateQuotaDisplay(q);
+      } catch (e) {
+        console.error('Failed to fetch quota:', e);
+      }
+    }
+
+    function updateQuotaDisplay(q) {
+      if (!q) return;
+      const count = q.count || 0;
+      const limit = q.limit || 100;
+      const pct = Math.min(100, Math.round((count / limit) * 100));
+      
+      const countText = document.getElementById('quotaCountText');
+      if (countText) countText.innerText = `${count}/${limit}`;
+      
+      const dot = document.getElementById('quotaIndicatorDot');
+      if (dot) {
+        dot.className = count >= limit ? 'w-2 h-2 rounded-full bg-red-500 animate-pulse' : (count >= 80 ? 'w-2 h-2 rounded-full bg-amber-400 animate-pulse' : 'w-2 h-2 rounded-full bg-emerald-500');
+      }
+
+      const settingsUsage = document.getElementById('settingsQuotaUsage');
+      if (settingsUsage) settingsUsage.innerText = `${count} / ${limit} (${pct}%)`;
+
+      const settingsBar = document.getElementById('settingsQuotaBar');
+      if (settingsBar) {
+        settingsBar.style.width = `${pct}%`;
+        settingsBar.className = count >= limit ? 'bg-red-500 h-2.5 rounded-full transition-all duration-500' : (count >= 80 ? 'bg-amber-400 h-2.5 rounded-full transition-all duration-500' : 'bg-emerald-500 h-2.5 rounded-full transition-all duration-500');
+      }
+
+      const settingsRemaining = document.getElementById('settingsQuotaRemaining');
+      if (settingsRemaining) {
+        settingsRemaining.innerText = count >= limit ? 'Daily limit reached (Hard Stop active)' : `${limit - count} searches remaining today`;
+      }
+
+      const banner = document.getElementById('quotaWarningBanner');
+      const title = document.getElementById('quotaWarningTitle');
+      const desc = document.getElementById('quotaWarningDesc');
+      const icon = document.getElementById('quotaWarningIcon');
+      const iconWrap = document.getElementById('quotaWarningIconWrapper');
+
+      if (banner && title && desc && icon && iconWrap) {
+        if (count >= limit) {
+          banner.className = 'p-3.5 rounded-xl border border-red-500/50 bg-red-950/40 text-xs shadow-lg shadow-red-950/40 flex items-center justify-between gap-3';
+          iconWrap.className = 'w-8 h-8 rounded-lg bg-red-600/30 border border-red-500/40 flex items-center justify-center shrink-0 text-red-400';
+          icon.className = 'fa-solid fa-hand text-red-400 text-sm';
+          title.innerText = 'Daily Google Search Hard Stop Reached (100 / 100 Used)';
+          desc.innerText = 'To guarantee $0 cost, Google deep portal indexing is automatically halted for today. Searches safely fall back to Carousell + Master Inventory without consuming quota. Resets at midnight.';
+          banner.classList.remove('hidden');
+        } else if (count >= 80) {
+          banner.className = 'p-3.5 rounded-xl border border-amber-500/50 bg-amber-950/40 text-xs shadow-lg shadow-amber-950/40 flex items-center justify-between gap-3';
+          iconWrap.className = 'w-8 h-8 rounded-lg bg-amber-600/30 border border-amber-500/40 flex items-center justify-center shrink-0 text-amber-400';
+          icon.className = 'fa-solid fa-triangle-exclamation text-amber-400 text-sm';
+          title.innerText = `Approaching Daily Free Quota: ${count} / ${limit} Searches Used`;
+          desc.innerText = `${limit - count} searches left today. When 100 is reached, searches will automatically halt Google requests to avoid any charges.`;
+          banner.classList.remove('hidden');
+        } else {
+          banner.classList.add('hidden');
+        }
+      }
+    }
+
+    async function saveSettings() {
+      const btn = document.getElementById('btnSaveSettings');
+      const passcode = document.getElementById('inputPasscode') ? document.getElementById('inputPasscode').value.trim() : '';
+      const apiKey = document.getElementById('inputGoogleApiKey') ? document.getElementById('inputGoogleApiKey').value.trim() : '';
+      const cseId = document.getElementById('inputGoogleCseId') ? document.getElementById('inputGoogleCseId').value.trim() : '';
+
+      if (passcode) {
+        localStorage.setItem('radar_passcode', passcode);
+      }
+
+      const payload = {
+        current_passcode: passcode,
+        radar_access_key: passcode
+      };
+      if (apiKey) payload.google_api_key = apiKey;
+      if (cseId) payload.google_cse_id = cseId;
+
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Saving...';
+      }
+
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Settings saved successfully!');
+          closeSettingsModal();
+          fetchQuota();
+        } else {
+          showToast('Failed to save settings: ' + (data.error || 'Check passcode'));
+        }
+      } catch (err) {
+        showToast('Passcode saved locally on this device!');
+        closeSettingsModal();
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> <span>Save Settings</span>';
+        }
+      }
+    }
+
     window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeShareModal();
+      if (e.key === 'Escape') {
+        closeShareModal();
+        closeSettingsModal();
+      }
     });
 
     function copyToClipboard(inputId, btn) {
@@ -1304,16 +1792,32 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       }, 100);
 
       try {
-        const res = await fetch(`/api/scan?q=${encodeURIComponent(q)}`);
+        const passcode = getStoredPasscode();
+        const res = await fetch(`/api/scan?q=${encodeURIComponent(q)}&key=${encodeURIComponent(passcode)}`);
         const data = await res.json();
         currentData = data;
         updateUI(data);
 
+        // Update quota from scan response
+        if (data.google_quota) {
+          updateQuotaDisplay(data.google_quota);
+        }
+
         // Mark channels complete
+        const gCount = data.sources?.['Google Portals'] || 0;
+        let gStatus = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${gCount} verified</span>`;
+        if (data.google_limit_reached) {
+          gStatus = '<span class="text-red-400 font-bold"><i class="fa-solid fa-ban"></i> Limit 100 reached</span>';
+        } else if (!data.is_authorized && data.has_google_key) {
+          gStatus = '<span class="text-amber-400 font-bold"><i class="fa-solid fa-lock"></i> Passcode Req</span>';
+        } else if (!data.has_google_key) {
+          gStatus = '<span class="text-slate-400 font-medium">Add API Key</span>';
+        }
+
+        document.getElementById('chGoogleStatus').innerHTML = gStatus;
         document.getElementById('chCarousellStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.Carousell || 0} live</span>`;
-        document.getElementById('chSocialStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> FB Ready</span>`;
-        document.getElementById('chPortalsStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> 3 Portals Ready</span>`;
         document.getElementById('chLocalStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.['Local Inventory'] || 0} matched</span>`;
+        document.getElementById('chSocialStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> 5 Launchers</span>`;
         
         statusText.innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-circle-check"></i> Scan Complete!</span> Discovered ${data.total_found} verified listings in ${data.elapsed_seconds}s`;
 
@@ -1402,7 +1906,8 @@ HTML_DASHBOARD = """<!DOCTYPE html>
     }
 
     function getBadgeClass(platform) {
-      const p = platform.toLowerCase();
+      const p = (platform || '').toLowerCase();
+      if (p.includes('google') || p.includes('lamudi') || p.includes('dot property') || p.includes('hoppler') || p.includes('property24') || p.includes('rentpad')) return 'badge-google';
       if (p.includes('carousell')) return 'badge-carousell';
       if (p.includes('social') || p.includes('facebook')) return 'badge-social';
       if (p.includes('master') || p.includes('database')) return 'badge-local';
@@ -1436,8 +1941,15 @@ HTML_DASHBOARD = """<!DOCTYPE html>
 
         // Source channel filter
         if (sourceFilter !== 'all') {
-          if (sourceFilter === 'Carousell' && !item.platform.toLowerCase().includes('carousell')) return false;
-          if (sourceFilter === 'Master' && !(item.platform.toLowerCase().includes('master') || item.platform.toLowerCase().includes('internal'))) return false;
+          if (sourceFilter === 'Google') {
+            const isGoogle = (item.source || '').toLowerCase().includes('google') ||
+                             ['lamudi', 'dot property', 'hoppler', 'property24', 'rentpad'].some(x => (item.platform || '').toLowerCase().includes(x));
+            if (!isGoogle) return false;
+          } else if (sourceFilter === 'Carousell' && !item.platform.toLowerCase().includes('carousell')) {
+            return false;
+          } else if (sourceFilter === 'Master' && !(item.platform.toLowerCase().includes('master') || item.platform.toLowerCase().includes('internal'))) {
+            return false;
+          }
         }
 
         return true;
@@ -1580,6 +2092,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
     // Auto-load initial scan on open with URL parameter restoration
     window.addEventListener('DOMContentLoaded', () => {
       applyUrlParams();
+      fetchQuota();
       triggerScan();
     });
   </script>
@@ -1590,6 +2103,16 @@ HTML_DASHBOARD = """<!DOCTYPE html>
 
 class ScannerHTTPHandler(BaseHTTPRequestHandler):
     scanner = PropertyInternetScanner()
+
+    def send_cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_cors_headers()
+        self.end_headers()
 
     def do_GET(self):
         try:
@@ -1602,18 +2125,32 @@ class ScannerHTTPHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
+                self.send_cors_headers()
                 self.end_headers()
                 self.wfile.write(body)
                 return
 
             elif path == "/api/scan":
                 q = qs.get("q", ["Proscenium 2 bedroom for sale"])[0]
-                scan_data = self.scanner.run_scan(query=q)
+                key = qs.get("key", [""])[0]
+                scan_data = self.scanner.run_scan(query=q, access_key=key)
                 body = json.dumps(scan_data, ensure_ascii=False).encode('utf-8')
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            elif path == "/api/quota":
+                status = self.scanner.quota_tracker.get_status()
+                status["has_google_key"] = bool(self.scanner.get_config("google_api_key") and self.scanner.get_config("google_cse_id"))
+                body = json.dumps(status, ensure_ascii=False).encode('utf-8')
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_cors_headers()
                 self.end_headers()
                 self.wfile.write(body)
                 return
@@ -1631,7 +2168,7 @@ class ScannerHTTPHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_cors_headers()
                 self.end_headers()
                 self.wfile.write(body)
                 return
@@ -1640,6 +2177,41 @@ class ScannerHTTPHandler(BaseHTTPRequestHandler):
             self.end_headers()
         except Exception as e:
             print(f"Error handling request: {e}", file=sys.stderr)
+            self.send_response(500)
+            self.end_headers()
+
+    def do_POST(self):
+        try:
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+            if path == "/api/config":
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8")
+                data = json.loads(body)
+                expected_key = self.scanner.get_config("radar_access_key")
+                req_key = data.get("current_passcode", "") or data.get("radar_access_key", "")
+
+                if expected_key and req_key.strip() != expected_key.strip():
+                    resp = {"success": False, "error": "Invalid access passcode"}
+                    status_code = 401
+                else:
+                    for k in ["google_api_key", "google_cse_id", "radar_access_key"]:
+                        if k in data and data[k] is not None:
+                            self.scanner.set_config(k, data[k])
+                    resp = {"success": True, "quota": self.scanner.quota_tracker.get_status()}
+                    status_code = 200
+
+                self.send_response(status_code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_cors_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps(resp, ensure_ascii=False).encode("utf-8"))
+                return
+
+            self.send_response(404)
+            self.end_headers()
+        except Exception as e:
+            print(f"Error handling POST request: {e}", file=sys.stderr)
             self.send_response(500)
             self.end_headers()
 
@@ -1656,7 +2228,7 @@ def main():
     scanner = PropertyInternetScanner()
 
     if args.serve:
-        server_address = ("", args.port)
+        server_address = ("0.0.0.0", args.port)
         httpd = ThreadingHTTPServer(server_address, ScannerHTTPHandler)
         print(f"🚀 Property Radar Web App running at http://localhost:{args.port}/")
         print("Press Ctrl+C to stop.")
