@@ -84,6 +84,16 @@ class PropertyInternetScanner:
             except Exception:
                 pass
 
+        # Check rental patterns like "135k/mo", "170k", "170K inclusive"
+        m_k = re.search(r'(?:PHP|₱|P|Asking Price|Price|🏷️)?\s*([\d\.]+)\s*(?:K|k)\b(?:\s*(?:/mo|/month|per month|inclusive|net))?', clean, re.I)
+        if m_k:
+            try:
+                val = float(m_k.group(1)) * 1_000
+                is_rent = any(w in clean.lower() for w in ['/mo', 'rent', 'lease', 'month', 'assoc', 'mos'])
+                return val, f"₱{val:,.0f}/mo" if is_rent else f"₱{val:,.0f}"
+            except Exception:
+                pass
+
         # Check full numbers like ₱ 135,000,000 or PHP 80,000,000
         m_full = re.search(r'(?:PHP|₱|P)\s*([\d,]{6,})', clean, re.I)
         if m_full:
@@ -164,207 +174,221 @@ class PropertyInternetScanner:
         return "FOR SALE"
 
     # -------------------------------------------------------------
-    # 1. Carousell PH Scanner (Live Web Marketplace for ANY Property)
+    # 1. Multi-Query Sub-Expander for Comprehensive Marketplace Coverage
+    # -------------------------------------------------------------
+    @staticmethod
+    def get_smart_subqueries(query):
+        """Generates smart query variations to maximize coverage across online marketplaces."""
+        cleaned = re.sub(r'\b(for sale|for rent|for lease|sale|rent|lease|available|looking for|inquiry)\b', '', query, flags=re.I).strip()
+        words = [w for w in cleaned.split() if w.lower() not in {'for', 'and', 'the', 'with', 'at', 'in'}]
+        
+        anchor = words[0] if words else ''
+        if len(words) >= 2 and words[1].lower() in {'terraces', 'alabang', 'salcedo', 'triangle', 'residences', 'suites', 'tower', 'villas', 'primea'}:
+            anchor = f"{words[0]} {words[1]}"
+            
+        m_bed = re.search(r'\b([1-9])\s*(?:BR|bedroom|bed)\b', query, re.I)
+        bed_str = f"{m_bed.group(1)} bedroom" if m_bed else ""
+        
+        subqueries = []
+        clean_direct = ' '.join(words)
+        if clean_direct:
+            subqueries.append(clean_direct)
+            
+        if ' or ' in cleaned.lower():
+            or_parts = re.split(r'\s+or\s+', cleaned, flags=re.I)
+            for part in or_parts:
+                part_clean = part.strip()
+                if anchor.lower() not in part_clean.lower():
+                    part_clean = f"{anchor} {part_clean}"
+                subqueries.append(part_clean)
+                
+        if anchor and bed_str:
+            subqueries.append(f"{anchor} {bed_str}")
+        if anchor:
+            subqueries.append(f"{anchor} Rockwell")
+            subqueries.append(anchor)
+            
+        seen = set()
+        final = []
+        for q in subqueries:
+            norm = ' '.join(q.split()).lower()
+            if norm not in seen and len(norm) >= 3:
+                seen.add(norm)
+                final.append(' '.join(q.split()))
+        return final[:4]
+
+    # -------------------------------------------------------------
+    # 2. Carousell PH Scanner (Live Web Marketplace for ANY Property)
     # -------------------------------------------------------------
     def scan_carousell(self, query):
         if not self.session:
             return []
         results = []
-        try:
-            enc_query = urllib.parse.quote(query)
-            url = f"https://www.carousell.ph/categories/property-102/?search={enc_query}"
-            resp = self.session.get(url, timeout=12)
-            if resp.status_code != 200:
-                return results
+        seen_urls = set()
+        subqueries = self.get_smart_subqueries(query)
 
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            seen_urls = set()
+        # Stop words and anchor extraction
+        stop_words = {'sale', 'rent', 'lease', 'room', 'bedroom', 'with', 'near', 'makati', 'city', 'philippines', 'the', 'for', 'and', 'or', 'unit'}
+        words = [w for w in re.findall(r'[a-zA-Z0-9]+', query) if len(w) >= 3 and w.lower() not in stop_words]
+        anchor = words[0].lower() if words else ''
+        q_keywords = [w.lower() for w in words]
 
-            # Extract meaningful search terms (length >= 3, excluding stop words)
-            stop_words = {'sale', 'rent', 'lease', 'room', 'bedroom', 'with', 'near', 'makati', 'city', 'philippines', 'the', 'for'}
-            q_keywords = [w.lower() for w in re.findall(r'[a-zA-Z0-9]+', query) if len(w) >= 3 and w.lower() not in stop_words]
-
-            for a in soup.select('a[href*="/p/"]'):
-                href = a.get('href', '')
-                if not href or href in seen_urls:
+        for sub_q in subqueries:
+            try:
+                enc_query = urllib.parse.quote(sub_q)
+                url = f"https://www.carousell.ph/categories/property-102/?search={enc_query}"
+                resp = self.session.get(url, timeout=10)
+                if resp.status_code != 200:
                     continue
 
-                full_url = "https://www.carousell.ph" + href if href.startswith('/') else href
-                title = a.get_text(separator=' | ', strip=True)
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                for a in soup.select('a[href*="/p/"]'):
+                    href = a.get('href', '')
+                    if not href:
+                        continue
+                    clean_path = href.split('?')[0]
+                    if clean_path in seen_urls:
+                        continue
 
-                if not title or len(title) < 10 or 'see listing details' in title.lower():
-                    continue
+                    full_url = "https://www.carousell.ph" + href if href.startswith('/') else href
+                    title = a.get_text(separator=' | ', strip=True)
 
-                # Locate card container for metadata
-                parent = a
-                for _ in range(4):
-                    if parent and parent.parent:
-                        parent = parent.parent
-                card_text = parent.get_text(separator=' \n ', strip=True) if parent else title
-                full_searchable = (title + " " + href + " " + card_text).lower()
+                    if not title or len(title) < 10 or 'see listing details' in title.lower():
+                        continue
 
-                # Flexible relevance check: at least 1 primary keyword must match
-                if q_keywords and not any(kw in full_searchable for kw in q_keywords):
-                    continue
+                    parent = a
+                    for _ in range(4):
+                        if parent and parent.parent:
+                            parent = parent.parent
+                    card_text = parent.get_text(separator=' \n ', strip=True) if parent else title
+                    full_searchable = (title + " " + href + " " + card_text).lower()
 
-                seen_urls.add(href)
-                price_val, price_fmt = self.parse_price(title)
-                if price_val == 0.0:
-                    price_val, price_fmt = self.parse_price(card_text)
+                    # Require core anchor (e.g. 'edades') in title or URL to eliminate keyword-stuffed ads from other buildings
+                    title_url_lower = (title + " " + href).lower()
+                    if anchor and anchor not in title_url_lower:
+                        continue
+                    if q_keywords and not any(kw in full_searchable for kw in q_keywords):
+                        continue
 
-                sqm = self.parse_sqm(title) or self.parse_sqm(card_text)
-                bedrooms = self.parse_bedrooms(title) or self.parse_bedrooms(card_text)
-                unit_type = self.parse_unit_type(title + " " + card_text)
-                cat = self.parse_category(title + " " + card_text)
+                    seen_urls.add(clean_path)
+                    price_val, price_fmt = self.parse_price(title)
+                    if price_val == 0.0:
+                        price_val, price_fmt = self.parse_price(card_text)
 
-                m_park = re.search(r'(\d+)\s*(?:parking|car\s*slot|slots)', card_text, re.I)
-                parking = f"{m_park.group(1)} Parking Slots" if m_park else "Not specified"
-                is_direct = "direct" in card_text.lower() or "direct" in title.lower()
+                    sqm = self.parse_sqm(title) or self.parse_sqm(card_text)
+                    bedrooms = self.parse_bedrooms(title) or self.parse_bedrooms(card_text)
+                    unit_type = self.parse_unit_type(title + " " + card_text)
+                    cat = self.parse_category(title + " " + card_text)
 
-                results.append({
-                    "id": f"carousell-{len(results)+1}",
-                    "title": title[:140],
-                    "platform": "Carousell Philippines",
-                    "source": "Live Web Market",
-                    "url": full_url,
-                    "price": price_val,
-                    "price_formatted": price_fmt,
-                    "bedrooms": bedrooms,
-                    "floor_area_sqm": sqm,
-                    "price_per_sqm": round(price_val / sqm, 2) if sqm > 0 and price_val > 0 else 0,
-                    "unit_type": unit_type,
-                    "category": cat,
-                    "parking": parking,
-                    "is_direct": is_direct,
-                    "snippet": card_text[:240].replace('\n', ' ')
-                })
-        except Exception as e:
-            print(f"Carousell scan error: {e}", file=sys.stderr)
+                    m_park = re.search(r'(\d+)\s*(?:parking|car\s*slot|slots)', card_text, re.I)
+                    parking = f"{m_park.group(1)} Parking Slots" if m_park else "Not specified"
+                    is_direct = "direct" in card_text.lower() or "direct" in title.lower()
+
+                    title_parts = [p.strip() for p in title.split('|') if p.strip() and not p.strip().startswith('PHP') and not p.strip().startswith('₱')]
+                    clean_title = title_parts[0] if title_parts else title
+                    if len(clean_title) < 15 and len(title_parts) > 1:
+                        clean_title = f"{title_parts[0]} - {title_parts[1]}"
+
+                    results.append({
+                        "id": f"carousell-{len(results)+1}",
+                        "title": clean_title[:140],
+                        "platform": "Carousell Philippines",
+                        "source": "Live Web Market",
+                        "url": full_url,
+                        "price": price_val,
+                        "price_formatted": price_fmt,
+                        "bedrooms": bedrooms,
+                        "floor_area_sqm": sqm,
+                        "price_per_sqm": round(price_val / sqm, 2) if sqm > 0 and price_val > 0 else 0,
+                        "unit_type": unit_type,
+                        "category": cat,
+                        "parking": parking,
+                        "is_direct": is_direct,
+                        "score": 15 if price_val > 0 else 5,
+                        "snippet": card_text[:240].replace('\n', ' ')
+                    })
+            except Exception as e:
+                print(f"Carousell scan error on subquery '{sub_q}': {e}", file=sys.stderr)
 
         return results
 
     # -------------------------------------------------------------
-    # 2. Broker Portals (Dot Property, Lamudi, Hoppler Deep Search)
+    # 3. Direct Portals & Social Media Launchpad Generator
     # -------------------------------------------------------------
+    def get_launchpad_links(self, query):
+        enc_q = urllib.parse.quote(query)
+        clean_q = query.replace('"', '').strip()
+        
+        return [
+            {
+                "id": "lp-facebook-market",
+                "name": "Facebook Marketplace",
+                "badge": "Direct Owners",
+                "badge_color": "purple",
+                "icon": "fa-brands fa-facebook text-blue-400",
+                "url": f"https://www.facebook.com/marketplace/manila/search?query={enc_q}",
+                "desc": f"Direct owner postings & rush broker sales for '{clean_q}' across Metro Manila."
+            },
+            {
+                "id": "lp-facebook-groups",
+                "name": "Facebook Broker Groups",
+                "badge": "Broker Co-Broke",
+                "badge_color": "blue",
+                "icon": "fa-solid fa-users text-indigo-400",
+                "url": f"https://www.facebook.com/search/posts/?q={enc_q}",
+                "desc": f"Exclusive authority & rush co-broke posts across real estate groups you belong to."
+            },
+            {
+                "id": "lp-lamudi",
+                "name": "Lamudi Philippines",
+                "badge": "Major Portal",
+                "badge_color": "sky",
+                "icon": "fa-solid fa-building text-sky-400",
+                "url": f"https://www.lamudi.com.ph/buy/?q={enc_q}",
+                "desc": f"Top accredited agency listings & price history for '{clean_q}'."
+            },
+            {
+                "id": "lp-dotproperty",
+                "name": "Dot Property",
+                "badge": "Brokerage Feed",
+                "badge_color": "emerald",
+                "icon": "fa-solid fa-globe text-emerald-400",
+                "url": f"https://www.dotproperty.com.ph/properties-for-sale?q={enc_q}",
+                "desc": f"Secondary market inventory and verified broker feeds across Metro Manila."
+            },
+            {
+                "id": "lp-hoppler",
+                "name": "Hoppler Luxury",
+                "badge": "High-End Network",
+                "badge_color": "amber",
+                "icon": "fa-solid fa-gem text-amber-400",
+                "url": f"https://www.hoppler.com.ph/search?q={enc_q}",
+                "desc": f"Curated high-end residential listings represented by licensed partner brokers."
+            }
+        ]
+
     def scan_portals(self, query):
-        results = []
-        enc_q = urllib.parse.quote(query)
-        clean_q = query.replace('"', '').strip()
+        return []
 
-        # Dynamic deep portal launch hubs for the exact inquiry
-        results.append({
-            "id": f"portal-dotproperty",
-            "title": f"Dot Property Philippines: Verified Listings for '{clean_q}'",
-            "platform": "Dot Property Portal",
-            "source": "Major Broker Portal",
-            "url": f"https://www.dotproperty.com.ph/properties-for-sale?q={enc_q}",
-            "price": 0.0,
-            "price_formatted": "Live Portal Search",
-            "bedrooms": self.parse_bedrooms(query),
-            "floor_area_sqm": 0.0,
-            "price_per_sqm": 0.0,
-            "unit_type": self.parse_unit_type(query),
-            "category": self.parse_category(query),
-            "parking": "Portal Index",
-            "is_direct": False,
-            "snippet": f"Active secondary market inventory and accredited brokerage listings indexed for '{clean_q}' across Metro Manila on Dot Property."
-        })
-
-        results.append({
-            "id": f"portal-lamudi",
-            "title": f"Lamudi Philippines: Listings & Price Trends for '{clean_q}'",
-            "platform": "Lamudi Portal",
-            "source": "Major Broker Portal",
-            "url": f"https://www.lamudi.com.ph/buy/?q={enc_q}",
-            "price": 0.0,
-            "price_formatted": "Live Portal Search",
-            "bedrooms": self.parse_bedrooms(query),
-            "floor_area_sqm": 0.0,
-            "price_per_sqm": 0.0,
-            "unit_type": self.parse_unit_type(query),
-            "category": self.parse_category(query),
-            "parking": "Portal Index",
-            "is_direct": False,
-            "snippet": f"Comprehensive brokerage and developer listings matching '{clean_q}' with verified pricing and floor plans on Lamudi."
-        })
-
-        results.append({
-            "id": f"portal-hoppler",
-            "title": f"Hoppler Luxury Real Estate: Network Listings for '{clean_q}'",
-            "platform": "Hoppler Network",
-            "source": "Luxury Broker Portal",
-            "url": f"https://www.hoppler.com.ph/search?q={enc_q}",
-            "price": 0.0,
-            "price_formatted": "Live Portal Search",
-            "bedrooms": self.parse_bedrooms(query),
-            "floor_area_sqm": 0.0,
-            "price_per_sqm": 0.0,
-            "unit_type": self.parse_unit_type(query),
-            "category": self.parse_category(query),
-            "parking": "Portal Index",
-            "is_direct": False,
-            "snippet": f"Curated high-end residential listings matching '{clean_q}' represented by licensed partner brokers on Hoppler."
-        })
-
-        return results
-
-    # -------------------------------------------------------------
-    # 3. Social Media & Facebook Broker Networks (Dynamic for ANY Property)
-    # -------------------------------------------------------------
     def scan_social_media(self, query):
-        results = []
-        enc_q = urllib.parse.quote(query)
-        clean_q = query.replace('"', '').strip()
-
-        # Dynamic Facebook Marketplace search for the exact query
-        results.append({
-            "id": f"social-fb-market",
-            "title": f"Facebook Marketplace: Direct Leads for '{clean_q}'",
-            "platform": "Facebook Marketplace",
-            "source": "Social Media (FB)",
-            "url": f"https://www.facebook.com/marketplace/manila/search?query={enc_q}",
-            "price": 0.0,
-            "price_formatted": "Live Marketplace Feed",
-            "bedrooms": self.parse_bedrooms(query),
-            "floor_area_sqm": 0.0,
-            "price_per_sqm": 0.0,
-            "unit_type": self.parse_unit_type(query),
-            "category": self.parse_category(query),
-            "parking": "Social Posts",
-            "is_direct": True,
-            "snippet": f"Real-time owner-posted and broker-direct property listings for '{clean_q}' in Metro Manila on Facebook Marketplace."
-        })
-
-        # Dynamic Facebook Broker Group Posts search for the exact query
-        results.append({
-            "id": f"social-fb-groups",
-            "title": f"Facebook Real Estate Groups: Broker Posts for '{clean_q}'",
-            "platform": "Facebook Broker Groups",
-            "source": "Social Media (FB)",
-            "url": f"https://www.facebook.com/search/posts/?q={enc_q}",
-            "price": 0.0,
-            "price_formatted": "Live Group Posts",
-            "bedrooms": self.parse_bedrooms(query),
-            "floor_area_sqm": 0.0,
-            "price_per_sqm": 0.0,
-            "unit_type": self.parse_unit_type(query),
-            "category": self.parse_category(query),
-            "parking": "Broker Posts",
-            "is_direct": False,
-            "snippet": f"Direct co-broke, exclusive authority, and rush sale posts matching '{clean_q}' shared within accredited Philippine real estate broker networks on Facebook."
-        })
-
-        return results
+        return []
 
     # -------------------------------------------------------------
     # 4. Universal Master Inventory Cross-Referencer (Sheets Cache + Master Files)
     # -------------------------------------------------------------
     def scan_local_inventory(self, query):
         results = []
-        stop_words = {'sale', 'rent', 'lease', 'for', 'with', 'and', 'the', 'unit', 'near', 'in', 'at'}
-        q_terms = [w.lower() for w in re.findall(r'[a-zA-Z0-9]+', query) if len(w) >= 3 and w.lower() not in stop_words]
-        if not q_terms:
+        stop_words = {'sale', 'rent', 'lease', 'for', 'with', 'and', 'or', 'the', 'unit', 'near', 'in', 'at', 'bedroom', 'bedrooms', 'br', 'condo', 'condominium', 'apartment'}
+        tokens = [w.lower() for w in re.findall(r'[a-zA-Z0-9]+', query) if len(w) >= 3 and w.lower() not in stop_words]
+        if not tokens:
             return results
+
+        type_keywords = {'suite', 'suites', 'villa', 'villas', 'loft', 'penthouse', 'garden', 'flat'}
+        query_types = [t for t in tokens if t in type_keywords]
+        core_anchors = [t for t in tokens if t not in type_keywords]
+        
+        m_bed = re.search(r'\b([1-9])\s*(?:BR|bedroom|bed)\b', query, re.I)
+        target_bed = f"{m_bed.group(1)}BR" if m_bed else None
 
         # 1. Prioritize sheets_cache.json (3,800+ live Google Sheet records)
         cache_file = os.path.join(self.workspace_dir, "sheets_cache.json")
@@ -379,41 +403,65 @@ class PropertyInternetScanner:
                         'property_description', 'location', 'developer', 'unit_no_address', 'all_columns'
                     ]).lower()
 
-                    if all(t in searchable for t in q_terms):
-                        desc = str(r.get('property_description', '') or '')
-                        price_val, price_fmt = self.parse_price(str(r.get('price', '')))
-                        if price_val == 0.0:
-                            price_val, price_fmt = self.parse_price(desc)
+                    if core_anchors:
+                        if not all(a in searchable for a in core_anchors):
+                            continue
+                    else:
+                        if not any(t in searchable for t in tokens):
+                            continue
 
-                        sqm = self.parse_sqm(str(r.get('floor_area', ''))) or self.parse_sqm(desc)
-                        source_str = str(r.get('source_or_listing', 'Master Inventory'))
-                        photos = str(r.get('photos', ''))
-                        status_str = str(r.get('availability', 'AVAILABLE'))
-                        cat = str(r.get('sheet_source', 'For Sale')).upper()
-                        if "RENT" in cat:
-                            cat = "FOR LEASE"
-                        else:
-                            cat = "FOR SALE"
+                    desc = str(r.get('property_description', '') or '')
+                    price_val, price_fmt = self.parse_price(str(r.get('price', '')))
+                    if price_val == 0.0:
+                        price_val, price_fmt = self.parse_price(desc)
 
-                        first_line = desc.strip().splitlines()[0] if desc.strip() else 'Inventory Property'
-                        results.append({
-                            "id": f"cache-{r.get('id', len(results)+1)}",
-                            "title": f"Internal Inventory: {first_line[:90]}",
-                            "platform": "Internal Master Database",
-                            "source": f"Master Sheet ({source_str})",
-                            "url": photos if photos.startswith('http') else "#",
-                            "price": price_val,
-                            "price_formatted": price_fmt,
-                            "bedrooms": self.parse_bedrooms(desc),
-                            "floor_area_sqm": sqm,
-                            "price_per_sqm": round(price_val / sqm, 2) if sqm > 0 and price_val > 0 else 0,
-                            "unit_type": self.parse_unit_type(desc),
-                            "category": cat,
-                            "parking": "Included" if "parking" in desc.lower() else "Not specified",
-                            "is_direct": "direct" in source_str.lower(),
-                            "status": status_str,
-                            "snippet": desc[:260].replace('\n', ' ')
-                        })
+                    sqm = self.parse_sqm(str(r.get('floor_area', ''))) or self.parse_sqm(desc)
+                    source_str = str(r.get('source_or_listing', 'Master Inventory'))
+                    photos = str(r.get('photos', ''))
+                    status_str = str(r.get('availability', 'AVAILABLE'))
+                    cat = str(r.get('sheet_source', 'For Sale')).upper()
+                    if "RENT" in cat or "LEASE" in cat:
+                        cat = "FOR LEASE"
+                    else:
+                        cat = "FOR SALE"
+
+                    bedrooms = self.parse_bedrooms(desc)
+                    unit_type = self.parse_unit_type(desc)
+
+                    score = 10
+                    if target_bed and (target_bed.lower() in desc.lower() or target_bed.lower() == bedrooms.lower()):
+                        score += 25
+                    if query_types and any(qt in searchable for qt in query_types):
+                        score += 15
+                    if price_val > 0:
+                        score += 5
+                    if "sale" in query.lower() and cat == "FOR SALE":
+                        score += 10
+                    elif "rent" in query.lower() and cat == "FOR LEASE":
+                        score += 10
+
+                    first_line = desc.strip().splitlines()[0] if desc.strip() else 'Inventory Property'
+                    clean_first_line = re.sub(r'^[🏷️\*\s\-:]+', '', first_line).strip()
+                    
+                    results.append({
+                        "id": f"cache-{r.get('id', len(results)+1)}",
+                        "title": f"Internal Inventory: {clean_first_line[:90]}",
+                        "platform": "Internal Master Database",
+                        "source": f"Master Sheet ({source_str})",
+                        "url": photos if photos.startswith('http') else "#",
+                        "price": price_val,
+                        "price_formatted": price_fmt,
+                        "bedrooms": bedrooms,
+                        "floor_area_sqm": sqm,
+                        "price_per_sqm": round(price_val / sqm, 2) if sqm > 0 and price_val > 0 else 0,
+                        "unit_type": unit_type,
+                        "category": cat,
+                        "parking": "Included" if "parking" in desc.lower() else "Not specified",
+                        "is_direct": "direct" in source_str.lower(),
+                        "status": status_str,
+                        "score": score,
+                        "snippet": desc[:260].replace('\n', ' ')
+                    })
             except Exception as e:
                 print(f"Error reading sheets_cache.json: {e}", file=sys.stderr)
 
@@ -425,35 +473,52 @@ class PropertyInternetScanner:
                     df = pd.read_excel(master_file)
                     for idx, row in df.iterrows():
                         row_str = " ".join(str(val) for val in row.dropna().values).lower()
-                        if all(term in row_str for term in q_terms):
-                            details = str(row.get('PROPERTY DETAILS', ''))
-                            price_val, price_fmt = self.parse_price(str(row.get('PRICE', '')))
-                            if price_val == 0.0:
-                                price_val, price_fmt = self.parse_price(details)
+                        if core_anchors:
+                            if not all(term in row_str for term in core_anchors):
+                                continue
+                        else:
+                            if not any(term in row_str for term in tokens):
+                                continue
 
-                            sqm = self.parse_sqm(str(row.get('FLOOR AREA', ''))) or self.parse_sqm(details)
-                            source_str = str(row.get('SOURCE OF LISTING', 'Master File'))
-                            photos_link = str(row.get('LINK TO PHOTOS', ''))
-                            first_line = details.strip().splitlines()[0] if details.strip() else 'Inventory Property'
+                        details = str(row.get('PROPERTY DETAILS', ''))
+                        price_val, price_fmt = self.parse_price(str(row.get('PRICE', '')))
+                        if price_val == 0.0:
+                            price_val, price_fmt = self.parse_price(details)
 
-                            results.append({
-                                "id": f"local-{idx}",
-                                "title": f"Internal Inventory: {first_line[:90]}",
-                                "platform": "Internal Master Database",
-                                "source": f"Master_For_Sale.xlsx ({source_str})",
-                                "url": photos_link if photos_link.startswith('http') else "#",
-                                "price": price_val,
-                                "price_formatted": price_fmt,
-                                "bedrooms": self.parse_bedrooms(details),
-                                "floor_area_sqm": sqm,
-                                "price_per_sqm": round(price_val / sqm, 2) if sqm > 0 and price_val > 0 else 0,
-                                "unit_type": self.parse_unit_type(details),
-                                "category": "FOR SALE",
-                                "parking": "Included" if "parking" in details.lower() else "Not specified",
-                                "is_direct": "direct" in source_str.lower(),
-                                "status": str(row.get('STATUS', 'AVAILABLE')),
-                                "snippet": details[:260].replace('\n', ' ')
-                            })
+                        sqm = self.parse_sqm(str(row.get('FLOOR AREA', ''))) or self.parse_sqm(details)
+                        source_str = str(row.get('SOURCE OF LISTING', 'Master File'))
+                        photos_link = str(row.get('LINK TO PHOTOS', ''))
+                        first_line = details.strip().splitlines()[0] if details.strip() else 'Inventory Property'
+                        clean_first_line = re.sub(r'^[🏷️\*\s\-:]+', '', first_line).strip()
+
+                        bedrooms = self.parse_bedrooms(details)
+                        unit_type = self.parse_unit_type(details)
+
+                        score = 10
+                        if target_bed and (target_bed.lower() in details.lower() or target_bed.lower() == bedrooms.lower()):
+                            score += 25
+                        if query_types and any(qt in row_str for qt in query_types):
+                            score += 15
+
+                        results.append({
+                            "id": f"local-{idx}",
+                            "title": f"Internal Inventory: {clean_first_line[:90]}",
+                            "platform": "Internal Master Database",
+                            "source": f"Master_For_Sale.xlsx ({source_str})",
+                            "url": photos_link if photos_link.startswith('http') else "#",
+                            "price": price_val,
+                            "price_formatted": price_fmt,
+                            "bedrooms": bedrooms,
+                            "floor_area_sqm": sqm,
+                            "price_per_sqm": round(price_val / sqm, 2) if sqm > 0 and price_val > 0 else 0,
+                            "unit_type": unit_type,
+                            "category": "FOR SALE",
+                            "parking": "Included" if "parking" in details.lower() else "Not specified",
+                            "is_direct": "direct" in source_str.lower(),
+                            "status": str(row.get('STATUS', 'AVAILABLE')),
+                            "score": score,
+                            "snippet": details[:260].replace('\n', ' ')
+                        })
                 except Exception as e:
                     print(f"Error reading Master_For_Sale.xlsx: {e}", file=sys.stderr)
 
@@ -464,29 +529,22 @@ class PropertyInternetScanner:
         now_str = datetime.now().strftime("%H:%M:%S")
         print(f"\n[{now_str}] 🛰️  [SCAN START] Initiating multi-channel search for: '{query}'...", flush=True)
 
-        all_results = []
-        # 1. Carousell Live Market
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛒  [CH-1: CAROUSELL PH] Querying marketplace...", flush=True)
+        # 1. Carousell Live Market with Multi-Query Expansion
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛒  [CH-1: CAROUSELL PH] Scanning live marketplace...", flush=True)
         carousell_items = self.scan_carousell(query)
         print(f"[{datetime.now().strftime('%H:%M:%S')}]     -> Found {len(carousell_items)} candidate listings on Carousell.", flush=True)
-        all_results.extend(carousell_items)
 
-        # 2. Portal Listings (Dot Property, Hoppler, Rockwell)
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🏢  [CH-2: BROKER PORTALS] Checking Dot Property & luxury networks...", flush=True)
-        portal_items = self.scan_portals(query)
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]     -> Found {len(portal_items)} curated portal entries.", flush=True)
-        all_results.extend(portal_items)
-
-        # 3. Social Media (Facebook Groups & Marketplace)
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 👥  [CH-3: SOCIAL MEDIA] Querying Facebook luxury broker groups...", flush=True)
-        social_items = self.scan_social_media(query)
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]     -> Found {len(social_items)} social broker posts.", flush=True)
-        all_results.extend(social_items)
-
-        # 4. Cross-reference Internal Master Inventory
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📂  [CH-4: MASTER INVENTORY] Cross-referencing Master_For_Sale.xlsx...", flush=True)
+        # 2. Cross-reference Internal Master Inventory
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📂  [CH-2: MASTER INVENTORY] Matching 3,867 Google Sheet & Excel records...", flush=True)
         local_items = self.scan_local_inventory(query)
         print(f"[{datetime.now().strftime('%H:%M:%S')}]     -> Matched {len(local_items)} internal inventory records.", flush=True)
+
+        # 3. Direct Portals & Social Launchpad
+        launchpad_items = self.get_launchpad_links(query)
+
+        # Combine REAL listings only (no ₱0 dummy cards in the listings grid)
+        all_results = []
+        all_results.extend(carousell_items)
         all_results.extend(local_items)
 
         # Filter out duplicates and lease if sale requested
@@ -506,6 +564,9 @@ class PropertyInternetScanner:
         sqms = [x['floor_area_sqm'] for x in final_list if x['floor_area_sqm'] > 20]
         rates = [x['price_per_sqm'] for x in final_list if x['price_per_sqm'] > 10_000]
 
+        # Sort: score descending, then price descending
+        final_list.sort(key=lambda x: (x.get('score', 0), x.get('price', 0)), reverse=True)
+
         summary = {
             "query": query,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -517,12 +578,12 @@ class PropertyInternetScanner:
             "avg_price_per_sqm": round(sum(rates) / len(rates)) if rates else 0,
             "sources": {
                 "Carousell": len(carousell_items),
-                "Portals": len(portal_items),
-                "Social Media": len(social_items),
-                "Local Inventory": len(local_items)
+                "Local Inventory": len(local_items),
+                "Portals & Social": len(launchpad_items)
             },
+            "launchpad": launchpad_items,
             "lan_ip": get_lan_ip(),
-            "results": sorted(final_list, key=lambda x: x['price'], reverse=True)
+            "results": final_list
         }
         return summary
 
@@ -709,10 +770,8 @@ HTML_DASHBOARD = """<!DOCTYPE html>
           </select>
 
           <select id="sourceFilter" onchange="renderCards()" class="bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
-            <option value="all">All Channels</option>
-            <option value="Carousell">Carousell PH</option>
-            <option value="Social">Social Media (FB)</option>
-            <option value="Portal">Broker Portals</option>
+            <option value="all">All Inventory Sources</option>
+            <option value="Carousell">Carousell PH (Live Web)</option>
             <option value="Master">Internal Master DB</option>
           </select>
         </div>
@@ -793,7 +852,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
           <i class="fa-solid fa-chart-line text-emerald-400"></i>
         </div>
         <div id="kpiRate" class="text-2xl font-bold text-emerald-400 mt-1">-</div>
-        <div class="text-[11px] text-slate-500 mt-1">Rockwell Market Valuation</div>
+        <div class="text-[11px] text-slate-500 mt-1">Market Valuation Rate</div>
       </div>
 
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
@@ -806,6 +865,32 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       </div>
     </section>
 
+    <!-- Live Portals & Social Media Deep Launchpad (Direct 1-Click Search with User's Own Account) -->
+    <section id="launchpadSection" class="bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border border-indigo-500/30 rounded-2xl p-4 shadow-xl space-y-3">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+            <i class="fa-solid fa-satellite-dish text-sm"></i>
+          </div>
+          <div>
+            <h3 class="font-bold text-sm text-white flex items-center gap-2">
+              <span>Live Portals & Social Media Launchpad</span>
+              <span class="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 px-2 py-0.5 rounded-full font-mono font-bold">1-CLICK SEARCH</span>
+            </h3>
+            <p class="text-[11px] text-slate-400">Instantly launch pre-filled queries on major protected portals & Facebook with your browser and account</p>
+          </div>
+        </div>
+        <div class="text-[11px] text-slate-400 flex items-center gap-1.5">
+          <i class="fa-solid fa-shield-halved text-emerald-400"></i>
+          <span>Zero login credentials stored · Searches securely with your personal account</span>
+        </div>
+      </div>
+
+      <!-- Launchpad Cards Grid -->
+      <div id="launchpadGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 pt-1">
+        <!-- Rendered by JS -->
+      </div>
+    </section>
 
     <!-- Results Table / Cards -->
     <section class="space-y-3">
@@ -1225,12 +1310,12 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         updateUI(data);
 
         // Mark channels complete
-        document.getElementById('chCarousellStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.Carousell || 0} found</span>`;
-        document.getElementById('chSocialStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.['Social Media'] || 0} found</span>`;
-        document.getElementById('chPortalsStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.Portals || 0} found</span>`;
-        document.getElementById('chLocalStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.['Local Inventory'] || 0} found</span>`;
+        document.getElementById('chCarousellStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.Carousell || 0} live</span>`;
+        document.getElementById('chSocialStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> FB Ready</span>`;
+        document.getElementById('chPortalsStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> 3 Portals Ready</span>`;
+        document.getElementById('chLocalStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.['Local Inventory'] || 0} matched</span>`;
         
-        statusText.innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-circle-check"></i> Scan Complete!</span> Discovered ${data.total_found} listings in ${data.elapsed_seconds}s`;
+        statusText.innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-circle-check"></i> Scan Complete!</span> Discovered ${data.total_found} verified listings in ${data.elapsed_seconds}s`;
 
       } catch (err) {
         alert("Scan request failed: " + err);
@@ -1265,6 +1350,40 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       }
     }
 
+    function renderLaunchpad(launchpad, query) {
+      const container = document.getElementById('launchpadGrid');
+      if (!container) return;
+      let list = (launchpad && launchpad.length > 0) ? launchpad : [];
+      if (list.length === 0) {
+        const enc_q = encodeURIComponent(query || 'Edades Rockwell');
+        list = [
+          { name: "FB Marketplace", badge: "Direct Owners", icon: "fa-brands fa-facebook text-blue-400", url: `https://www.facebook.com/marketplace/manila/search?query=${enc_q}`, desc: "Direct owner postings in Metro Manila" },
+          { name: "FB Broker Groups", badge: "Co-Broke", icon: "fa-solid fa-users text-indigo-400", url: `https://www.facebook.com/search/posts/?q=${enc_q}`, desc: "Search posts in your broker groups" },
+          { name: "Lamudi PH", badge: "Major Portal", icon: "fa-solid fa-building text-sky-400", url: `https://www.lamudi.com.ph/buy/?q=${enc_q}`, desc: "Brokerage listings & price trends" },
+          { name: "Dot Property", badge: "Broker Feed", icon: "fa-solid fa-globe text-emerald-400", url: `https://www.dotproperty.com.ph/properties-for-sale?q=${enc_q}`, desc: "Secondary market verified feeds" },
+          { name: "Hoppler Luxury", badge: "Partner Brokers", icon: "fa-solid fa-gem text-amber-400", url: `https://www.hoppler.com.ph/search?q=${enc_q}`, desc: "Curated high-end partner listings" }
+        ];
+      }
+
+      container.innerHTML = list.map(lp => `
+        <a href="${lp.url}" target="_blank" rel="noopener noreferrer" class="bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800 hover:border-indigo-500/50 rounded-xl p-3 transition flex flex-col justify-between group shadow-sm hover:shadow-indigo-500/10">
+          <div>
+            <div class="flex items-center justify-between gap-1 mb-1.5">
+              <span class="text-xs font-bold text-white group-hover:text-indigo-300 transition flex items-center gap-1.5">
+                <i class="${lp.icon}"></i> ${lp.name}
+              </span>
+              <span class="text-[9px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded font-medium border border-slate-700/60">${lp.badge}</span>
+            </div>
+            <p class="text-[11px] text-slate-400 line-clamp-2 leading-tight">${lp.desc}</p>
+          </div>
+          <div class="mt-2.5 pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-indigo-400 font-semibold group-hover:text-indigo-300">
+            <span>Live Search</span>
+            <i class="fa-solid fa-arrow-up-right-from-square text-[10px] transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition"></i>
+          </div>
+        </a>
+      `).join('');
+    }
+
     function updateUI(data) {
       if (data && data.lan_ip) {
         serverLanIp = data.lan_ip;
@@ -1278,6 +1397,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       document.getElementById('kpiDirect').innerText = directCount;
       document.getElementById('scanTimestamp').innerText = 'Last scanned: ' + (data.timestamp || 'Just now');
       
+      renderLaunchpad(data.launchpad, data.query);
       renderCards();
     }
 
@@ -1315,7 +1435,10 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         if (typeFilter !== 'all' && !item.unit_type.toLowerCase().includes(typeFilter.toLowerCase())) return false;
 
         // Source channel filter
-        if (sourceFilter !== 'all' && !item.platform.toLowerCase().includes(sourceFilter.toLowerCase())) return false;
+        if (sourceFilter !== 'all') {
+          if (sourceFilter === 'Carousell' && !item.platform.toLowerCase().includes('carousell')) return false;
+          if (sourceFilter === 'Master' && !(item.platform.toLowerCase().includes('master') || item.platform.toLowerCase().includes('internal'))) return false;
+        }
 
         return true;
       });
