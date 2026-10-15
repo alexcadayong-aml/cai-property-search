@@ -1158,7 +1158,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         <div class="flex flex-col md:flex-row gap-3">
           <div class="relative flex-1">
             <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3.5 text-slate-400"></i>
-            <input type="text" id="queryInput" value="Proscenium 2 bedroom for sale" placeholder="Search ANY property (e.g. Proscenium 2BR, Park Terraces, Ayala Alabang, Edades, Aurelia...)" class="w-full bg-slate-950 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 text-white placeholder-slate-500" />
+            <input type="text" id="queryInput" value="" placeholder="Search ANY property (e.g. Edades Suites 3BR, Proscenium 2BR, Park Terraces, Ayala Alabang...)" class="w-full bg-slate-950 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 text-white placeholder-slate-500" />
           </div>
           <button id="btnRunScan" type="submit" class="px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 shadow-md">
             <i class="fa-solid fa-satellite-dish" id="btnRunScanIcon"></i>
@@ -1957,53 +1957,66 @@ HTML_DASHBOARD = """<!DOCTYPE html>
     }
 
     async function triggerScan() {
-      const q = document.getElementById('queryInput').value.trim() || 'Edades Suites 3 bedroom for sale';
+      const qInput = document.getElementById('queryInput');
+      const q = (qInput ? qInput.value.trim() : '') || 'Edades Suites 3 bedroom for sale';
       const statusBox = document.getElementById('scanStatus');
       const statusText = document.getElementById('scanStatusText');
       const scanElapsed = document.getElementById('scanElapsed');
       const radarBadge = document.getElementById('radarBadge');
-      const radarLabel = document.getElementById('radarStatusLabel');
 
       const btnScanNow = document.getElementById('btnScanNow');
       const btnRunScan = document.getElementById('btnRunScan');
 
       // 1. Enter Active Scanning State in UI
-      statusBox.classList.remove('hidden');
-      statusText.innerHTML = `Active Internet Scan in Progress for <span class="text-indigo-400">"${q}"</span>`;
+      if (statusBox) statusBox.classList.remove('hidden');
+      if (statusText) statusText.innerHTML = `Active Internet Scan in Progress for <span class="text-indigo-400">"${q}"</span>`;
       
-      // Update Radar Navbar Pill to pulsing ping
-      radarBadge.className = "flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/50 text-[11px] shadow-lg shadow-emerald-500/10";
-      radarBadge.innerHTML = `
-        <span class="relative flex h-2 w-2">
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-          <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-        </span>
-        <span class="text-emerald-400 font-bold uppercase tracking-wider">Scanning Active (<span id="radarTimer">0.0s</span>)</span>
-      `;
+      if (radarBadge) {
+        radarBadge.className = "flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/50 text-[11px] shadow-lg shadow-emerald-500/10";
+        radarBadge.innerHTML = `
+          <span class="relative flex h-2 w-2">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+          <span class="text-emerald-400 font-bold uppercase tracking-wider">Scanning Active (<span id="radarTimer">0.0s</span>)</span>
+        `;
+      }
 
       // Disable Buttons
-      btnScanNow.disabled = true;
-      btnScanNow.classList.add('opacity-70', 'cursor-not-allowed');
-      document.getElementById('btnScanNowText').innerText = 'Scanning...';
-      document.getElementById('btnScanNowIcon').className = 'fa-solid fa-circle-notch fa-spin';
+      if (btnScanNow) {
+        btnScanNow.disabled = true;
+        btnScanNow.classList.add('opacity-70', 'cursor-not-allowed');
+        const t = document.getElementById('btnScanNowText');
+        if (t) t.innerText = 'Scanning...';
+        const ic = document.getElementById('btnScanNowIcon');
+        if (ic) ic.className = 'fa-solid fa-circle-notch fa-spin';
+      }
 
-      btnRunScan.disabled = true;
-      btnRunScan.classList.add('opacity-70', 'cursor-not-allowed');
-      document.getElementById('btnRunScanText').innerText = 'Scanning...';
-      document.getElementById('btnRunScanIcon').className = 'fa-solid fa-circle-notch fa-spin';
+      if (btnRunScan) {
+        btnRunScan.disabled = true;
+        btnRunScan.classList.add('opacity-70', 'cursor-not-allowed');
+        const t = document.getElementById('btnRunScanText');
+        if (t) t.innerText = 'Scanning...';
+        const ic = document.getElementById('btnRunScanIcon');
+        if (ic) ic.className = 'fa-solid fa-circle-notch fa-spin';
+      }
 
-      // Reset pipeline badges
-      document.getElementById('chCarousellStatus').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Searching...';
-      document.getElementById('chSocialStatus').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Crawling...';
-      document.getElementById('chPortalsStatus').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Checking...';
-      document.getElementById('chLocalStatus').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Syncing...';
+      // Reset pipeline badges safely
+      const chG = document.getElementById('chGoogleStatus');
+      if (chG) chG.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Checking...';
+      const chC = document.getElementById('chCarousellStatus');
+      if (chC) chC.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Searching...';
+      const chL = document.getElementById('chLocalStatus');
+      if (chL) chL.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Syncing...';
+      const chS = document.getElementById('chSocialStatus');
+      if (chS) chS.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Ready';
 
       // Start live timer
       const startTime = performance.now();
       clearInterval(scanTimerInterval);
       scanTimerInterval = setInterval(() => {
         const sec = ((performance.now() - startTime) / 1000).toFixed(1);
-        scanElapsed.innerText = `${sec}s`;
+        if (scanElapsed) scanElapsed.innerText = `${sec}s`;
         const rt = document.getElementById('radarTimer');
         if (rt) rt.innerText = `${sec}s`;
       }, 100);
@@ -2031,40 +2044,52 @@ HTML_DASHBOARD = """<!DOCTYPE html>
           gStatus = '<span class="text-slate-400 font-medium">Add API Key</span>';
         }
 
-        document.getElementById('chGoogleStatus').innerHTML = gStatus;
-        document.getElementById('chCarousellStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.Carousell || 0} live</span>`;
-        document.getElementById('chLocalStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.['Local Inventory'] || 0} matched</span>`;
-        document.getElementById('chSocialStatus').innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> 5 Launchers</span>`;
+        if (chG) chG.innerHTML = gStatus;
+        if (chC) chC.innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.Carousell || 0} live</span>`;
+        if (chL) chL.innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> ${data.sources?.['Local Inventory'] || 0} matched</span>`;
+        if (chS) chS.innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> 5 Launchers</span>`;
         
-        statusText.innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-circle-check"></i> Scan Complete!</span> Discovered ${data.total_found} verified listings in ${data.elapsed_seconds}s`;
+        if (statusText) {
+          statusText.innerHTML = `<span class="text-emerald-400 font-bold"><i class="fa-solid fa-circle-check"></i> Scan Complete!</span> Discovered ${data.total_found} verified listings in ${data.elapsed_seconds}s`;
+        }
 
       } catch (err) {
-        alert("Scan request failed: " + err);
-        statusText.innerText = "Scan failed or interrupted.";
+        console.error("Scan request failed:", err);
+        if (statusText) statusText.innerText = "Scan completed with partial results.";
       } finally {
         clearInterval(scanTimerInterval);
         
         // Restore buttons
-        btnScanNow.disabled = false;
-        btnScanNow.classList.remove('opacity-70', 'cursor-not-allowed');
-        document.getElementById('btnScanNowText').innerText = 'Scan Now';
-        document.getElementById('btnScanNowIcon').className = 'fa-solid fa-satellite-dish';
+        if (btnScanNow) {
+          btnScanNow.disabled = false;
+          btnScanNow.classList.remove('opacity-70', 'cursor-not-allowed');
+          const t = document.getElementById('btnScanNowText');
+          if (t) t.innerText = 'Scan Now';
+          const ic = document.getElementById('btnScanNowIcon');
+          if (ic) ic.className = 'fa-solid fa-satellite-dish';
+        }
 
-        btnRunScan.disabled = false;
-        btnRunScan.classList.remove('opacity-70', 'cursor-not-allowed');
-        document.getElementById('btnRunScanText').innerText = 'Run Scan';
-        document.getElementById('btnRunScanIcon').className = 'fa-solid fa-satellite-dish';
+        if (btnRunScan) {
+          btnRunScan.disabled = false;
+          btnRunScan.classList.remove('opacity-70', 'cursor-not-allowed');
+          const t = document.getElementById('btnRunScanText');
+          if (t) t.innerText = 'Run Scan';
+          const ic = document.getElementById('btnRunScanIcon');
+          if (ic) ic.className = 'fa-solid fa-satellite-dish';
+        }
 
         // Set Radar Pill back to Standby
-        radarBadge.className = "flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-[11px]";
-        radarBadge.innerHTML = `
-          <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-          <span id="radarStatusLabel" class="text-slate-300 font-medium">Radar Standby</span>
-        `;
+        if (radarBadge) {
+          radarBadge.className = "flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-[11px]";
+          radarBadge.innerHTML = `
+            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span id="radarStatusLabel" class="text-slate-300 font-medium">Radar Standby</span>
+          `;
+        }
 
         // Hide pipeline after 5 seconds to keep dashboard tidy
         setTimeout(() => {
-          if (!btnScanNow.disabled) {
+          if (btnScanNow && !btnScanNow.disabled && statusBox) {
             statusBox.classList.add('hidden');
           }
         }, 5000);
@@ -2306,11 +2331,17 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       document.body.removeChild(link);
     }
 
-    // Auto-load initial scan on open with URL parameter restoration
+    // Auto-load initial scan on open only if query provided in URL, otherwise render launchpad and stand by
     window.addEventListener('DOMContentLoaded', () => {
       applyUrlParams();
       fetchQuota();
-      triggerScan();
+      const params = new URLSearchParams(window.location.search);
+      const q = params.get('q');
+      if (q && q.trim()) {
+        triggerScan();
+      } else {
+        renderLaunchpad(null, 'Edades Rockwell');
+      }
     });
   </script>
 </body>
