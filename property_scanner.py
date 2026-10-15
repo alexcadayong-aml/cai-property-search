@@ -126,6 +126,7 @@ class PropertyInternetScanner:
         env_map = {
             "google_api_key": "GOOGLE_API_KEY",
             "google_cse_id": "GOOGLE_CSE_ID",
+            "serper_api_key": "SERPER_API_KEY",
             "radar_access_key": "RADAR_ACCESS_KEY"
         }
         env_var = env_map.get(key)
@@ -625,12 +626,105 @@ class PropertyInternetScanner:
     # -------------------------------------------------------------
     # 5. Google Custom Search (Strategy 1: Direct Portal Indexing)
     # -------------------------------------------------------------
-    def scan_google_portals(self, query):
-        """Strategy 1: Queries Google Custom Search API for verified listings on Lamudi, Dot Property, Hoppler."""
+    # -------------------------------------------------------------
+    # 5. Google / Serper Deep Search (Strategy 1: Direct Portal Indexing)
+    # -------------------------------------------------------------
+    def scan_serper_portals(self, query):
+        """Strategy 1 (Primary): Queries Serper.dev Google Search API for verified listings on Lamudi, Dot Property, Hoppler, Property24, Rentpad."""
         if not self.session:
             return []
+        serper_key = self.get_config("serper_api_key") or self.get_config("google_api_key")
+        if not serper_key:
+            return []
+
+        results = []
+        try:
+            url = "https://google.serper.dev/search"
+            portal_query = f"(site:lamudi.com.ph OR site:dotproperty.com.ph OR site:hoppler.com.ph OR site:property24.com.ph OR site:rentpad.com.ph) {query}"
+            payload = {
+                "q": portal_query,
+                "gl": "ph",
+                "hl": "en",
+                "num": 10
+            }
+            headers = {
+                "X-API-KEY": serper_key.strip(),
+                "Content-Type": "application/json"
+            }
+            resp = self.session.post(url, json=payload, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                print(f"Serper API returned status {resp.status_code}: {resp.text[:120]}", file=sys.stderr)
+                return []
+
+            data = resp.json()
+            items = data.get("organic", [])
+
+            for it in items:
+                title = it.get("title", "")
+                link = it.get("link", "")
+                snippet = it.get("snippet", "")
+
+                domain = urllib.parse.urlparse(link).netloc.lower()
+                platform = "Portal Listing"
+                if "lamudi.com" in domain:
+                    platform = "Lamudi Philippines"
+                elif "dotproperty.com" in domain:
+                    platform = "Dot Property"
+                elif "hoppler.com" in domain:
+                    platform = "Hoppler Luxury"
+                elif "property24.com" in domain:
+                    platform = "Property24 PH"
+                elif "rentpad.com" in domain:
+                    platform = "Rentpad PH"
+                elif "carousell.com" in domain:
+                    continue
+
+                price_val, price_fmt = self.parse_price(title)
+                if price_val == 0.0:
+                    price_val, price_fmt = self.parse_price(snippet)
+
+                sqm = self.parse_sqm(title) or self.parse_sqm(snippet)
+                bedrooms = self.parse_bedrooms(title) or self.parse_bedrooms(snippet)
+                unit_type = self.parse_unit_type(title + " " + snippet)
+                category = self.parse_category(title + " " + snippet)
+
+                clean_title = re.sub(r'\s*[-|]\s*(?:Lamudi|Dot Property|Hoppler|Property24).*$', '', title, flags=re.I).strip()
+
+                results.append({
+                    "id": f"portal-{abs(hash(link)) % 1000000}",
+                    "title": clean_title[:140],
+                    "platform": platform,
+                    "source": "Google Verified Index",
+                    "url": link,
+                    "price": price_val,
+                    "price_formatted": price_fmt,
+                    "bedrooms": bedrooms,
+                    "floor_area_sqm": sqm,
+                    "price_per_sqm": round(price_val / sqm, 2) if sqm > 0 and price_val > 0 else 0,
+                    "unit_type": unit_type,
+                    "category": category,
+                    "parking": "Included" if "parking" in snippet.lower() else "Not specified",
+                    "is_direct": "direct" in snippet.lower() or "owner" in snippet.lower(),
+                    "score": 40 if price_val > 0 else 20,
+                    "snippet": snippet[:260].replace('\n', ' ')
+                })
+        except Exception as e:
+            print(f"Error querying Serper Google Search: {e}", file=sys.stderr)
+
+        return results
+
+    def scan_google_portals(self, query):
+        """Dispatches to Serper.dev Google Search or legacy Google Custom Search."""
+        if not self.session:
+            return []
+        serper_key = self.get_config("serper_api_key")
         api_key = self.get_config("google_api_key")
         cse_id = self.get_config("google_cse_id")
+
+        # If Serper key or standalone API key without CSE ID is present, use Serper
+        if serper_key or (api_key and not cse_id):
+            return self.scan_serper_portals(query)
+
         if not api_key or not cse_id:
             return []
 
@@ -723,11 +817,11 @@ class PropertyInternetScanner:
         expected_key = self.get_config("radar_access_key")
         is_authorized = not expected_key or (access_key and access_key.strip() == expected_key.strip())
 
-        # Strategy 1: Google Custom Search API with Quota Tracking & Hard Stop at 100
+        # Strategy 1: Google Custom Search / Serper API with Quota Tracking & Hard Stop at 100
         google_items = []
         quota_status = self.quota_tracker.get_status()
         google_limit_reached = quota_status['is_exhausted']
-        has_google_key = bool(self.get_config("google_api_key") and self.get_config("google_cse_id"))
+        has_google_key = bool(self.get_config("serper_api_key") or self.get_config("google_api_key"))
 
         if is_authorized and has_google_key and not google_limit_reached:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍  [CH-G: GOOGLE PORTALS] ({quota_status['count']}/{quota_status['limit']}) Querying Lamudi, Dot Property, Hoppler...", flush=True)
@@ -1335,25 +1429,42 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         <p class="text-[11px] text-slate-400">Protects your 100 daily searches from unauthorized public users. Keep this saved in your browser across your devices (phone, laptop, tablet).</p>
       </div>
 
-      <!-- Google Custom Search Configuration -->
+      <!-- Google Search API Credentials -->
       <div class="space-y-3 pt-2 border-t border-slate-800">
-        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-          <i class="fa-solid fa-sliders text-indigo-400"></i> Google Custom Search Credentials
-        </h4>
-
-        <div class="space-y-2">
-          <label class="block text-xs font-medium text-slate-300">Google Custom Search API Key</label>
-          <input type="password" id="inputGoogleApiKey" placeholder="AIzaSy..." class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono" />
+        <div class="flex items-center justify-between">
+          <h4 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+            <i class="fa-brands fa-google text-blue-400"></i> Google Portal Search API Key
+          </h4>
+          <span class="text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded font-mono font-bold">2,500 FREE SEARCHES</span>
         </div>
 
-        <div class="space-y-2">
-          <label class="block text-xs font-medium text-slate-300">Search Engine ID (CX)</label>
-          <input type="text" id="inputGoogleCseId" placeholder="e.g. 0123456789abcdef:..." class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono" />
+        <div class="space-y-1.5">
+          <label class="block text-xs font-medium text-slate-300">API Key (from Serper.dev or Google)</label>
+          <input type="password" id="inputGoogleApiKey" placeholder="Paste your API key here..." class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono" />
         </div>
 
-        <p class="text-[11px] text-slate-400 leading-relaxed">
-          Need keys? Create a free Google Programmable Search Engine at <a href="https://programmablesearchengine.google.com/" target="_blank" class="text-indigo-400 hover:underline">programmablesearchengine.google.com</a> and get a free API key at <a href="https://developers.google.com/custom-search/v1/overview" target="_blank" class="text-indigo-400 hover:underline">Google Cloud Console</a>.
-        </p>
+        <div class="bg-indigo-950/40 border border-indigo-500/30 rounded-xl p-3 text-[11px] text-slate-300 space-y-1.5">
+          <p class="font-bold text-white flex items-center gap-1.5">
+            <i class="fa-solid fa-bolt text-amber-400"></i> How to get your free key in 30 seconds:
+          </p>
+          <ol class="list-decimal list-inside space-y-1 text-slate-300 pl-1">
+            <li>Open <a href="https://serper.dev" target="_blank" class="text-indigo-400 underline font-semibold">serper.dev</a> in your browser.</li>
+            <li>Click <strong>"Sign up"</strong> and choose <strong>"Continue with Google"</strong>.</li>
+            <li>On the dashboard, click <strong>"Copy"</strong> next to <strong>"Your API Key"</strong> and paste it above!</li>
+          </ol>
+          <p class="text-[10px] text-slate-400 pt-1">
+            * 100% Free: Delivers real Google results across Lamudi, Dot Property, Hoppler, Property24, and Rentpad. No credit card required.
+          </p>
+        </div>
+
+        <!-- Optional Legacy Google CX -->
+        <details class="text-xs text-slate-400 pt-1">
+          <summary class="cursor-pointer hover:text-slate-300 font-medium text-[11px]">Advanced: Legacy Google Custom Search Engine ID (Optional)</summary>
+          <div class="mt-2 space-y-1.5 pl-2 border-l border-slate-800">
+            <label class="block text-[11px] text-slate-400">Search Engine ID (CX)</label>
+            <input type="text" id="inputGoogleCseId" placeholder="Optional (only for legacy Google CSE users)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono" />
+          </div>
+        </details>
       </div>
 
       <!-- Action Buttons -->
@@ -2145,7 +2256,7 @@ class ScannerHTTPHandler(BaseHTTPRequestHandler):
 
             elif path == "/api/quota":
                 status = self.scanner.quota_tracker.get_status()
-                status["has_google_key"] = bool(self.scanner.get_config("google_api_key") and self.scanner.get_config("google_cse_id"))
+                status["has_google_key"] = bool(self.scanner.get_config("serper_api_key") or self.scanner.get_config("google_api_key"))
                 body = json.dumps(status, ensure_ascii=False).encode('utf-8')
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -2195,7 +2306,7 @@ class ScannerHTTPHandler(BaseHTTPRequestHandler):
                     resp = {"success": False, "error": "Invalid access passcode"}
                     status_code = 401
                 else:
-                    for k in ["google_api_key", "google_cse_id", "radar_access_key"]:
+                    for k in ["google_api_key", "google_cse_id", "serper_api_key", "radar_access_key"]:
                         if k in data and data[k] is not None:
                             self.scanner.set_config(k, data[k])
                     resp = {"success": True, "quota": self.scanner.quota_tracker.get_status()}
