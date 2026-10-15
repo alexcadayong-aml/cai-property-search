@@ -848,6 +848,24 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         <h4 class="text-xs font-bold uppercase tracking-wider text-indigo-400 flex items-center gap-1.5">
           <i class="fa-solid fa-link"></i> Live Dashboard Share Links
         </h4>
+
+        <!-- 24/7 Public Cloud URL (Worldwide) -->
+        <div class="bg-gradient-to-r from-indigo-950/80 to-slate-950 p-3 rounded-xl border border-indigo-500/50 shadow-lg shadow-indigo-950/30 space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+              <i class="fa-solid fa-globe text-indigo-400"></i> 24/7 Public Cloud URL (Accessible Worldwide)
+            </span>
+            <span class="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 px-2 py-0.5 rounded font-mono font-bold">24/7 ONLINE</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <input type="text" id="shareCloudUrl" readonly class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white w-full font-mono select-all focus:outline-none" />
+            <button onclick="copyToClipboard('shareCloudUrl', this)" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-bold text-white whitespace-nowrap flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition">
+              <i class="fa-regular fa-copy"></i>
+              <span>Copy 24/7 URL</span>
+            </button>
+          </div>
+          <p class="text-[11px] text-slate-400">Share with clients, co-brokers, or teammates anywhere in the world. Stays accessible 24 hours a day on phones, laptops, and tablets.</p>
+        </div>
         
         <!-- Local Wi-Fi / LAN Link -->
         <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
@@ -1000,10 +1018,11 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       const q = document.getElementById('queryInput') ? document.getElementById('queryInput').value.trim() : 'Property Inquiry';
       const items = (window.lastFilteredResults && window.lastFilteredResults.length > 0 ? window.lastFilteredResults : (currentData.results || [])).slice(0, 10);
       const totalCount = window.lastFilteredResults ? window.lastFilteredResults.length : (currentData.results || []).length;
-      const port = window.location.port || '8765';
       const qs = updateUrlParams();
-      const path = window.location.pathname || '/';
-      const shareUrl = 'http://' + (serverLanIp || window.location.hostname) + ':' + port + path + (qs ? '?' + qs : '');
+      const isCloud = window.location.hostname.includes('onrender.com') || window.location.protocol === 'https:';
+      const cloudUrl = 'https://cai-property-search.onrender.com/radar' + (qs ? '?' + qs : '');
+      const localUrl = window.location.origin + (window.location.pathname || '/') + (qs ? '?' + qs : '');
+      const shareUrl = isCloud ? localUrl : cloudUrl;
 
       const lines = [
         '🏢 PROPERTY RADAR BRIEF: ' + q.toUpperCase(),
@@ -1021,7 +1040,7 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       });
 
       lines.push('----------------------------------');
-      lines.push('⚡ Live Interactive Radar View:');
+      lines.push('⚡ Live 24/7 Radar View:');
       lines.push(shareUrl);
 
       return lines.join(String.fromCharCode(10));
@@ -1033,9 +1052,12 @@ HTML_DASHBOARD = """<!DOCTYPE html>
       const port = window.location.port || '8765';
       const path = window.location.pathname || '/';
       
+      const cloudUrl = 'https://cai-property-search.onrender.com/radar' + (qs ? '?' + qs : '');
       const lanUrl = 'http://' + (serverLanIp || window.location.hostname) + ':' + port + path + (qs ? '?' + qs : '');
       const localUrl = window.location.origin + path + (qs ? '?' + qs : '');
 
+      const cloudInput = document.getElementById('shareCloudUrl');
+      if (cloudInput) cloudInput.value = cloudUrl;
       document.getElementById('shareLanUrl').value = lanUrl;
       document.getElementById('shareLocalUrl').value = localUrl;
       document.getElementById('shareViberBrief').value = buildViberBrief();
